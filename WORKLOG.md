@@ -104,7 +104,7 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
 | 1 | four principles in CLAUDE.md + this worklog | section added, committed | ✅ done |
 | 2 | contract: add `call_us`, regen pb.go, update CONTRACTS §3 | `go build ./...` clean, diff = new field only | ✅ done |
 | 3 | apply Step 4 w/ fix (finalize, httpapi, session, videowriter, main) | `go build` + `go vet` clean | ✅ done |
-| 4 | targeted alignment test | gapped agent burst lands at correct offset | ⏳ |
+| 4 | targeted alignment test | gapped agent burst lands at correct offset | ✅ done |
 
 ### Phase 0 — git baseline
 - `git init` (branch `master`), `user.email=pawan@unleashx.ai`.
@@ -153,3 +153,36 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
   packing / missing EOF newlines) in `server.go`, `testhooks.go`,
   `videowriter.go`, `cmd/feedtest`, `cmd/videotest` were left untouched per
   Surgical Changes — they predate this work (baseline already flags them).
+
+### Phase 4 — targeted alignment test
+- `internal/recorder/session_test.go` :: `TestAudioTimelineCallUsAlignment`.
+  Feeds continuous user mic + a gapped agent track (burst 0–200 ms, **1 s of
+  nothing sent**, burst 1200–1400 ms) straight through `session.write`, closes,
+  and asserts on `agent.pcm`:
+  - length == `pcmByteOffset(1400ms)` = 134 400 B (raw-append would be 38 400 B,
+    so this alone catches the bug),
+  - three exact regions: burst1 marker | **silence gap** | burst2 marker starting
+    precisely at `pcmByteOffset(1200ms)` = 115 200 B (not slid earlier).
+  - Then drives the **real `combine`** (→ `audio_only`, no video) and `ffprobe`
+    asserts the output is 2-channel stereo (agent → right).
+- Why it proves the fix: agent → right channel is the already-tested combine
+  mapping, so the asserted `agent.pcm` placement *is* the right-channel
+  placement; and the length/region checks fail under the old raw-append.
+- ffmpeg `silencedetect` on the RIGHT channel (logged by the test) confirms it
+  end-to-end:
+  ```
+  silence_start: 0.200146
+  silence_end:   1.199771 | silence_duration: 0.999625
+  ```
+  → the right channel is silent across the gap and burst 2 resumes at 1.20 s,
+  its true `call_us`. Drift eliminated.
+- Result: `go test ./...` green; `go build`/`go vet` clean.
+
+## Outcome
+
+The audio-timeline defect is fixed at the contract layer (`call_us`) and the
+recorder layer (silence-positioned PCM + shared video offset), proven by a
+deterministic test plus an ffmpeg end-to-end check. All four finalize status
+branches, the stereo L/R mapping, `-c:v copy`, and the audio-only fallback are
+unchanged. Commits: baseline → principles+worklog → contract → Step 4+fix →
+test, one per phase.
