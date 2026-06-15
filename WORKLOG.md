@@ -274,3 +274,65 @@ owns session state + the consent flow and never touches media.
   `transcript.txt` + `.json`. With no intent service up, `/turn` folds to
   `please_repeat` (hard-invariant #2: degrade, never break) — the expected path.
 
+---
+
+# Gateway — Step 3 (media plane)
+
+Build-order step 3: port the old `app/services/webrtc_video.py` (aiortc → Pion)
+into `cmd/gateway` + `internal/gateway/`. Terminates the one send-only WebRTC
+peer per call, runs Sarvam STT / ElevenLabs TTS, drives the turn loop
+(interpretation A), tees media to the recorder. Not an SFU.
+
+## Milestone plan (each independently committable + verifiable)
+
+| # | Milestone | Verify |
+|---|-----------|--------|
+| G0 | scaffold + the one-origin call clock | `go build` clean; `time.Now()` grep == 1 |
+| G1 | `recordclient` (gRPC RecordStream + /finalize) | canned frames → real recorder → call-aligned output |
+| G2 | `peer` (Pion, OnTrack video/audio, depacketize, drop-until-keyframe, Opus decode); **SPS/PPS caching fix** | canned SDP + synthetic RTP → keyframe-led AU stream finalizes playable |
+| G3 | `stt` (Sarvam WS) + resampler | offline canned-frame request/parse |
+| G4 | `tts` (ElevenLabs) + **AgentSink seam** | canned plan → byte-exact PCM |
+| G5 | `control` WS (JSON in, binary audio out) | scripted WS exchange |
+| G6 | `brainclient` | against running brain |
+| G7 | `turnloop` + idempotent teardown | full loop; folds to please_repeat on STT/intent failure |
+| G8 | e2e: retarget `web/index.html`, live keys | real browser call, Q/A lip-sync correct |
+
+Carry-overs from earlier sessions, mapped: **call_us honesty** → G0 (structural,
+below); **SPS/PPS caching** → G2 (depacketizer caches param sets, guarantees first
+forwarded keyframe AU carries them inline — unblocks the recorder's wait-forever);
+**AgentSink seam** → G4 (the one interface in the gateway: WS-audio impl now, the
+future Opus-track swap is a second impl).
+
+Decisions confirmed with the user: WS lib = `gorilla/websocket` (both the
+/control server and the Sarvam client). Vendor clients (STT/TTS) unit-tested
+offline with canned bytes — live keys only at G8 e2e; build phases never gated on
+credentials or network.
+
+## Phase log
+| # | Phase | Check | Status |
+|---|-------|-------|--------|
+| G0 | scaffold (config, session/clock, main) + one-origin gate | `go build`/`vet`/`gofmt` clean, grep gate == 1 | ✅ done |
+
+### Phase G0 — scaffold + the one-origin call clock
+- **The clock is made structural, not conventional.** `internal/gateway/session/`
+  holds `Session{ID, start}` with `CallUS()` = µs since `start`. `start` is set
+  exactly once, in `newSession` — the **only** `time.Now()` in all of
+  `internal/gateway` (grep-verifiable). Every VIDEO_AU/USER_PCM/AGENT_PCM frame
+  in G2+ stamps `s.CallUS()`; "one origin, all three streams" (CONTRACTS §3) is
+  thus a property the diff's grep catches, not a discipline to remember. Two
+  origins → silent drift; the gate is the first thing reviewed in every gateway diff.
+- `session.Registry` (mutex map) = live sessions; `Create` stamps the clock,
+  `Remove` is the idempotent teardown handle.
+- `internal/gateway/config/`: the exact env set from GATEWAY.md, localhost
+  defaults, vendor keys default empty.
+- `cmd/gateway/main.go`: HTTP surface (CONTRACTS §2) — `offer` creates the session
+  + stamps the clock (501 until the G2 peer), `control` (501 until the G5 WS),
+  `close` real + idempotent (200). Go 1.22 method-routed ServeMux.
+- Added `session/` to GATEWAY.md's package layout (it isn't in the original list;
+  it's the shared per-call hub `peer`/`turnloop`/sinks attach to — can't live in
+  `package main` without an import cycle. Name `session/` per user, matches domain).
+- Verified: `go build ./...`, `go vet`, `gofmt -l` all clean; one-origin grep == 1;
+  runtime smoke — boots, offer→501 (logs `call_us=0`), control→501, close→200
+  (idempotent), `GET offer`→405 (method routing). go.mod untouched (G0 is
+  stdlib-only; Pion/websocket/opus resolve via proxy, enter as later phases import).
+

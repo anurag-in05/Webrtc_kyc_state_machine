@@ -30,6 +30,7 @@ No SFU libs. No media frameworks. No DI container. No Opus encoder.
 ## Package layout (`internal/gateway/`)
 
 ```
+session/     per-call state hub: the one call clock (call_us origin) + live-session registry
 peer/        Pion peer create/answer/close, OnTrack wiring, ICE restart
 stt/         Sarvam WS client  (CONTRACTS §5) — PCM in → vad/final out
 tts/         ElevenLabs client (CONTRACTS §5) — executes a tts_plan → PCM frames
