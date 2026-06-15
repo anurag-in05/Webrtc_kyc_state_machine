@@ -46,25 +46,20 @@ type Client struct {
 	tsSet    [3]bool
 }
 
-// New dials the recorder gRPC (RECORDER_GRPC_ADDR) and opens this call's stream.
-// The dial is lazy — a recorder that is down does not fail here; sends to it just
-// drop (the call continues, the recording degrades). httpURL is
-// RECORDER_HTTP_URL, used by Finalize.
+// New dials the recorder gRPC (RECORDER_GRPC_ADDR). The dial is lazy and the
+// stream is opened by the sender goroutine, NOT here — so a recorder that is down
+// at call start does not fail the call (invariant 4): New returns cleanly and
+// frames are simply dropped until/unless the stream opens. New errors only on a
+// malformed address. httpURL is RECORDER_HTTP_URL, used by Finalize.
 func New(sess *session.Session, grpcAddr, httpURL string) (*Client, error) {
 	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("recordclient dial %s: %w", grpcAddr, err)
 	}
-	stream, err := recorderpb.NewRecorderClient(conn).RecordStream(context.Background())
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("recordclient open stream: %w", err)
-	}
 	c := &Client{
 		sess:    sess,
 		httpURL: httpURL,
 		conn:    conn,
-		stream:  stream,
 		ch:      make(chan *recorderpb.Frame, sendBuffer),
 		done:    make(chan struct{}),
 	}
@@ -97,18 +92,26 @@ func (c *Client) Send(kind recorderpb.Kind, data []byte) {
 	}
 }
 
-// run is the single sender goroutine: it drains the queue to the gRPC stream. A
-// send failure means the recorder stream broke; we stop transmitting but keep
-// draining so producers never block on a full queue. Degrades the recording;
-// never the call.
+// run is the single sender goroutine. It opens the stream (a down recorder here
+// degrades the recording, not the call — invariant 4) and drains the queue to it.
+// A send failure means the stream broke; we stop transmitting but keep draining
+// so producers never block on a full queue.
 func (c *Client) run() {
 	defer close(c.done)
+	stream, err := recorderpb.NewRecorderClient(c.conn).RecordStream(context.Background())
+	if err != nil {
+		log.Printf("recordclient: recorder stream unavailable, recording degraded: %v", err)
+		for range c.ch { // drain-drop so producers never block
+		}
+		return
+	}
+	c.stream = stream
 	broken := false
 	for f := range c.ch {
 		if broken {
 			continue
 		}
-		if err := c.stream.Send(f); err != nil {
+		if err := stream.Send(f); err != nil {
 			log.Printf("recordclient: stream send failed, recording degraded: %v", err)
 			broken = true
 		}
@@ -118,15 +121,18 @@ func (c *Client) run() {
 // Close flushes the stream and tears down the gRPC connection. Call it only after
 // the media producers have stopped (teardown order) — like the recorder's
 // videoWriter, it closes the send channel. The half-close makes the recorder see
-// io.EOF and flush its files.
+// io.EOF and flush its files. c.stream is set by run() and read here only after
+// <-c.done, so no lock is needed; it stays nil if the recorder was never reachable.
 func (c *Client) Close() {
 	close(c.ch)
 	<-c.done
-	ack, err := c.stream.CloseAndRecv()
-	if err != nil {
-		log.Printf("recordclient: close stream: %v", err)
-	} else {
-		log.Printf("recordclient: session %s recorded %d frames", c.sess.ID, ack.GetFrames())
+	if c.stream != nil {
+		ack, err := c.stream.CloseAndRecv()
+		if err != nil {
+			log.Printf("recordclient: close stream: %v", err)
+		} else {
+			log.Printf("recordclient: session %s recorded %d frames", c.sess.ID, ack.GetFrames())
+		}
 	}
 	c.conn.Close()
 }

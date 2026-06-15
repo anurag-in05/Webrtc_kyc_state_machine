@@ -204,3 +204,28 @@ func TestFinalizePostsToRecorder(t *testing.T) {
 		t.Errorf("got %s %s, want POST /sessions/sessF/finalize", gotMethod, gotPath)
 	}
 }
+
+// TestRecorderDownDegradesNotFails is the invariant-4 guard: "the recorder never
+// fails the call." When the recorder is unreachable at call start, New must
+// succeed, Send must not block or panic (frames drop), and Close must return
+// cleanly without hanging. Regression: New opened the gRPC stream eagerly, so a
+// down recorder errored out of New, which propagated up and failed the offer
+// (HTTP 500). The stream is now opened by the sender goroutine instead.
+func TestRecorderDownDegradesNotFails(t *testing.T) {
+	sess := session.NewRegistry().Create("down")
+	// 127.0.0.1:1 has nothing listening — the recorder is "down".
+	c, err := New(sess, "127.0.0.1:1", "")
+	if err != nil {
+		t.Fatalf("New must not fail when the recorder is down: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		c.Send(recorderpb.Kind_USER_PCM, filled(0x55)) // must drop, never block/panic
+	}
+	done := make(chan struct{})
+	go func() { c.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung with the recorder down")
+	}
+}

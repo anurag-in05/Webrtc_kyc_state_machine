@@ -352,7 +352,11 @@ credentials or network.
   non-blocking and drops on a full queue; a broken recorder stream sets a `broken`
   flag and silently drains (degrades the recording, never stalls the call). `Close`
   drains, half-closes (recorder sees `io.EOF` → flushes files), logs the Ack count.
-  The dial is lazy, so a recorder that's down doesn't fail call setup.
+  The dial is lazy, so a recorder that's down doesn't fail call setup. **[Corrected
+  later:** as first written, `New` *opened the stream* eagerly, so a down recorder
+  actually DID fail the call — an invariant-4 bug fixed in commit "recordclient:
+  open recorder stream lazily" (stream-open moved into the sender goroutine), with
+  a `TestRecorderDownDegradesNotFails` regression guard.**]**
 - **No new module deps** — `grpc` was already in go.mod (the recorder uses it).
 - Tests (`recordclient_test.go`), all offline against the **real recorder service**
   on a localhost gRPC listener — real code, real gRPC, no external/live recorder,
