@@ -312,6 +312,7 @@ credentials or network.
 | # | Phase | Check | Status |
 |---|-------|-------|--------|
 | G0 | scaffold (config, session/clock, main) + one-origin gate | `go build`/`vet`/`gofmt` clean, grep gate == 1 | ✅ done |
+| G1 | `recordclient` (gRPC tee + Finalize) | canned frames → real recorder → call-aligned output | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -335,4 +336,36 @@ credentials or network.
   runtime smoke — boots, offer→501 (logs `call_us=0`), control→501, close→200
   (idempotent), `GET offer`→405 (method routing). go.mod untouched (G0 is
   stdlib-only; Pion/websocket/opus resolve via proxy, enter as later phases import).
+
+### Phase G1 — recordclient (the recorder tee)
+- `internal/gateway/recordclient/`: owns the per-call gRPC `RecordStream` +
+  `POST /finalize`. **call_us has exactly one source:** `Send(kind, data)` stamps
+  `call_us = sess.CallUS()` internally — callers pass no timestamp, so they can't
+  pass a wrong one. `ts_us` is *derived from the same clock* (`call_us` − this
+  stream's first-frame `call_us`), adding no second time source; the one-origin
+  grep stays == 1, and the only real `CallUS()` call in non-test code is this
+  stamping site.
+- **Never block media** (invariant 4 / GATEWAY.md): a buffered channel (512) + one
+  sender goroutine — the recorder's own `videoWriter` pattern. `Send` enqueues
+  non-blocking and drops on a full queue; a broken recorder stream sets a `broken`
+  flag and silently drains (degrades the recording, never stalls the call). `Close`
+  drains, half-closes (recorder sees `io.EOF` → flushes files), logs the Ack count.
+  The dial is lazy, so a recorder that's down doesn't fail call setup.
+- **No new module deps** — `grpc` was already in go.mod (the recorder uses it).
+- Tests (`recordclient_test.go`), all offline against the **real recorder service**
+  on a localhost gRPC listener — real code, real gRPC, no external/live recorder,
+  no keys, no ffmpeg:
+  - `TestSendStreamsCallAlignedToRecorder` — a gapped agent track (burst 0–200 ms,
+    1 s silent, burst 1200–1400 ms) streamed through the gRPC path is reconstructed
+    by the recorder call-aligned: burst 2 at exactly `115200`, total `134400`, three
+    regions (burst1 | silence | burst2). The exact offsets from recorder's
+    `TestAudioTimelineCallUsAlignment` — proves `call_us` survives the gateway→recorder
+    hop intact.
+  - `TestSendStampsCallUsFromClock` — after a 300 ms real delay, a single `Send`
+    lands at the byte offset the clock reported (not 0) → `call_us` is sourced from
+    `CallUS()`, not arrival order.
+  - `TestFinalizePostsToRecorder` — `Finalize` issues `POST /sessions/{id}/finalize`
+    and treats 202 as success (httptest stub; no ffmpeg).
+- Verified: `go build`/`vet`/`gofmt` clean, full repo `go test ./...` green (recorder
+  suite untouched), one-origin grep still == 1.
 
