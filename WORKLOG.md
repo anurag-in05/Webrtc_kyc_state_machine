@@ -224,7 +224,7 @@ owns session state + the consent flow and never touches media.
 |---|-------|-------|--------|
 | B1 | trims: config, schemas, session_manager, metrics shim, rm tts_reference, reqs | all modules import clean | ✅ done |
 | B2 | `services/tts_plan.py` (split + resolve helpers) | plan matches CONTRACTS §4 | ✅ done |
-| B3 | `storage/` + recap port + `routes/sessions.py` + `main.py` | app imports, TestClient | ⏳ |
+| B3 | `storage/` + recap port + `routes/sessions.py` + `main.py` | app imports, TestClient | ✅ done |
 | B4 | verbatim tests (zip) + new API smoke test | pytest green | ⏳ |
 
 ### Phase B1 — trims + scaffolding
@@ -246,3 +246,31 @@ owns session state + the consent flow and never touches media.
   Plus `resolve_voice_id`/`resolve_model_id` (pack → env → default).
 - Verified the plan byte-for-byte against the CONTRACTS §4 example, the empty /
   no-var cases, and the resolvers (english→default voice, hindi→pack voice).
+
+### Phase B3 — storage + routes + app entry
+- `storage/`: `base.py` (a one-method `StorageBackend` Protocol), `local.py`
+  (writes under `recordings_dir`, returns `/recordings/{sid}/{file}`), `s3.py`
+  (ported verbatim — local-copy-first, boto3 chain, falls back to a local URL on
+  missing creds/upload error), `__init__.py` factory picking the backend from
+  `AWS_STORAGE` at import. Note: `s3.py` only uploads `.mp4`; the brain writes
+  only `.txt`/`.json`, so transcripts always resolve to local URLs (faithful to
+  the old repo — `aws_url` fronts the same dir in prod). The MP4-upload path is
+  unused here but kept as the spec's "S3 with local-dir fallback the code has".
+- `storage/recap.py`: ported the **transcript half only** of the old recap —
+  `_format_transcript_txt` / `_format_transcript_json` + `finalize_call`. The
+  WAV-merge half is dropped (recorder owns audio, CONTRACTS §3).
+- `routes/sessions.py`: the four spec session routes — `POST /start`,
+  `GET /{id}`, `POST /{id}/turn`, `POST /{id}/end` (prefix `/api/v1/sessions`) +
+  `GET /health` in `main.py`. `/turn` is transcript-in → `classify_safely_async`
+  → `finalize_turn` → text + `tts_plan` out. `/end` forces a terminal state,
+  writes transcripts (idempotent via `mark_session_ended`), best-effort
+  `gateway /close`, returns `recording_status: pending`. GET proxies
+  `recorder /status` post-end. Downstream gateway/recorder calls are best-effort
+  (2 s timeout) so the brain answers standalone.
+- `main.py`: FastAPI app + permissive CORS + a `/recordings` static mount (so
+  transcript URLs are GETtable) + the sessions router.
+- Verified (TestClient): app imports clean, `/health` → 200, all routes mounted;
+  full `/start → /turn → /end` smoke returns the CONTRACTS §1 shapes and writes
+  `transcript.txt` + `.json`. With no intent service up, `/turn` folds to
+  `please_repeat` (hard-invariant #2: degrade, never break) — the expected path.
+
