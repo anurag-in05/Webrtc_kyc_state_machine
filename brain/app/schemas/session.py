@@ -1,5 +1,11 @@
 """Pydantic request/response models for the sessions API. Declarative only —
-no I/O, no business logic."""
+no I/O, no business logic.
+
+`StartSessionRequest` is kept EXACTLY (it is the current schema). The response
+models are the text-only shapes from CONTRACTS §1: the brain returns a `tts_plan`
++ `voice_id`/`model_id` (the gateway synthesizes audio) and never any audio
+stream/URL fields.
+"""
 
 from __future__ import annotations
 
@@ -40,30 +46,38 @@ class StartSessionRequest(BaseModel):
     video_transport: Literal["ws", "webrtc"] | None = None
 
 
+class TurnEvent(BaseModel):
+    event_type: str
+    payload: dict = Field(default_factory=dict)
+
+
+# A tts_plan is an ordered list of heterogeneous segments
+# ({"kind":"speech",...} / {"kind":"silence","ms":N}) — see CONTRACTS §4. Kept as
+# plain dicts; the gateway executes them.
+TtsPlan = list[dict]
+
 
 class StartSessionResponse(BaseModel):
     session_id: str
     state: str
     agent_text: str
-    agent_audio_stream_url: str
-    agent_audio_sample_rate: int
-    agent_audio_format: str
+    tts_plan: TtsPlan
+    voice_id: str
+    model_id: str
+    language: str
     turn_index: int
-    # Transport discriminator; selects the client media block.
-    video_transport: Literal["ws", "webrtc"] = "webrtc"
-    # Present iff video_transport == "webrtc" (legacy "ws" is audio-only).
-    video_offer_url: str | None = None
-    ice_servers: list[dict] | None = None
+    ice_servers: list[dict] = Field(default_factory=list)
+    gateway_offer_url: str
     # getUserMedia capture constraints, server-driven so res/fps tune in one place.
     capture_width: int = 640
     capture_height: int = 360
     capture_fps: int = 12
-    # False (VIDEO_ENABLED=false) = client requests mic only, no camera/video track.
     video_enabled: bool = True
 
-class TurnEvent(BaseModel):
-    event_type: str
-    payload: dict = Field(default_factory=dict)
+
+class TurnRequest(BaseModel):
+    transcript: str
+
 
 class TurnResponse(BaseModel):
     session_id: str
@@ -71,32 +85,38 @@ class TurnResponse(BaseModel):
     intent: str
     transcript: str
     agent_text: str
-    agent_audio_stream_url: str
-    agent_audio_sample_rate: int
-    agent_audio_format: str
-    user_audio_url: str
+    tts_plan: TtsPlan
+    voice_id: str
+    model_id: str
     turn_index: int
     attempt_count: int
     events: list[TurnEvent]
     status: Literal["active", "completed", "failed"]
 
 
+class SessionSnapshot(BaseModel):
+    """GET /sessions/{id} — current snapshot for the gateway (bootstrap) and the
+    browser (poll)."""
+
+    session_id: str
+    state: str
+    language: str
+    turn_index: int
+    agent_text: str
+    tts_plan: TtsPlan
+    voice_id: str
+    model_id: str
+    status: Literal["active", "completed", "failed"]
+    events: list[TurnEvent]
+    # Proxied from the recorder: pending|complete|partial|audio_only|failed|disabled.
+    recording_status: str = "pending"
+    full_call_video_url: str | None = None
+
+
 class EndSessionResponse(BaseModel):
     session_id: str
     state: str
     turn_index: int
-    audio_files: list[str]
-    events: list[TurnEvent]
-    full_call_audio_url: str | None = None
     transcript_url: str | None = None
     transcript_json_url: str | None = None
-    # Mux runs in background; starts "pending", client polls GET /sessions/{sid}
-    # until terminal. "disabled" = RECORDINGS_ENABLED=false (no artifacts, no mux).
-    recording_status: Literal[
-        "pending", "complete", "partial", "audio_only", "failed", "disabled"
-    ] = "pending"
-    full_call_video_url: str | None = None
-
-
-class SessionStatusResponse(EndSessionResponse):
-    pass
+    recording_status: str = "pending"

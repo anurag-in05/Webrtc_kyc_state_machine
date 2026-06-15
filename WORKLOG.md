@@ -186,3 +186,54 @@ deterministic test plus an ffmpeg end-to-end check. All four finalize status
 branches, the stereo L/R mapping, `-c:v copy`, and the audio-only fallback are
 unchanged. Commits: baseline → principles+worklog → contract → Step 4+fix →
 test, one per phase.
+
+---
+
+# Brain — Step 2 (text-only control plane)
+
+Build-order step 2: a thin FastAPI text API over the already-copied logic
+(state machine, turn service, phrase builder, i18n, intent client). The brain
+owns session state + the consent flow and never touches media.
+
+## Findings
+- Most logic was already copied into `brain/app/`. What's missing/new: `main.py`,
+  `routes/sessions.py`, `services/tts_plan.py`, the transcript writer, packaging.
+- The copied `session_manager`/`turn_service`/`tts_reference` didn't import clean:
+  they referenced missing `app.services.metrics`, a Redis `session_store`,
+  `webrtc_video`, and `utils/audio`. `tts_reference.py` was the old
+  ElevenLabs `pipeline/tts.py` (HTTP/audio) — the spec says delete it.
+- `language_processor` degrades gracefully with no `OPENAI_API_KEY` (English
+  pass-through), so `/start` is curl-testable with zero external services.
+- Only `english` + `hindi` i18n packs are registered; other languages raise
+  `NotImplementedError` (test with English).
+
+## Decisions (confirmed)
+- **session_manager → in-memory only** (Option 1): dropped the Redis store,
+  claim/persist/snapshot/rehydrate, and every media field. The text-only
+  `Session` keeps ids/language/customer/phrases/flow/turn_index/events/
+  transcript/recording_status/pending_agent_text/timestamps.
+- **Use the old-repo zip** (`~/Downloads/videokyc-wsfu-dev.zip`): port
+  `storage/recap.py` (transcript half only — drop the WAV merge) and the
+  verbatim tests (`test_state_machine.py`, `test_intent.py`).
+- Proceeding by default: a no-op `metrics.py` shim (keeps the verbatim
+  turn_service/session_manager imports), delete `tts_reference.py`, and
+  best-effort gateway `/close` + recorder `/status` calls (brain runs standalone).
+
+## Phase log
+| # | Phase | Check | Status |
+|---|-------|-------|--------|
+| B1 | trims: config, schemas, session_manager, metrics shim, rm tts_reference, reqs | all modules import clean | ✅ done |
+| B2 | `services/tts_plan.py` (split + resolve helpers) | plan matches CONTRACTS §4 | ⏳ |
+| B3 | `storage/` + recap port + `routes/sessions.py` + `main.py` | app imports, TestClient | ⏳ |
+| B4 | verbatim tests (zip) + new API smoke test | pytest green | ⏳ |
+
+### Phase B1 — trims + scaffolding
+- `config.py`: slimmed to the control-flow/i18n/intent/storage/echo set (29 keys,
+  was 40+); dropped redis/webrtc/mux/audio-rate/loop-monitor; added
+  `gateway_url`/`recorder_url`.
+- `schemas/session.py`: `StartSessionRequest` kept verbatim; response models
+  rewritten to CONTRACTS §1 (`tts_plan`/`voice_id`/`model_id`/`gateway_offer_url`;
+  no `agent_audio_*`).
+- `session_manager.py`: in-memory rewrite per Option 1.
+- `metrics.py`: no-op shim. `tts_reference.py`: deleted. `requirements.txt`: added.
+- Verified: every kept/trimmed module imports clean (`openai` absent → graceful).

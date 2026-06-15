@@ -1,0 +1,16 @@
+# Brain (text-only control plane) runtime deps. No media libs: the gateway +
+# recorder own WebRTC/STT/TTS/audio, so there's no aiortc/numpy/scipy here.
+fastapi
+uvicorn[standard]
+pydantic>=2
+pydantic-settings
+httpx
+loguru
+openai            # name/address transliteration (graceful no-op without OPENAI_API_KEY)
+
+# Transcript S3 upload path only (aws_storage=s3); local-dir fallback needs nothing.
+# boto3
+
+# Tests
+pytest
+pytest-asyncio
