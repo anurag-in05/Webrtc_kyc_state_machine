@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/Eyevinn/mp4ff v0.52.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.15

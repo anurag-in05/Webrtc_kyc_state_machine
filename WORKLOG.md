@@ -315,6 +315,7 @@ credentials or network.
 | G1 | `recordclient` (gRPC tee + Finalize) | canned frames → real recorder → call-aligned output | ✅ done |
 | G2a | `peer` H.264 depacketizer + SPS/PPS cache | synthetic-RTP tests: drop-until-keyframe, inline param sets, FU-A, teardown flush | ✅ done |
 | G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; build + boot smoke; SDP/OnTrack at G8 e2e | ✅ done |
+| G3 | `stt` (Sarvam WS) + `audio` resampler | offline WS-server tests: framing fidelity, vendor error, wall-clock timeout, drop-oldest, sample-exact resample | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -447,4 +448,40 @@ credentials or network.
   degrades not fails, `/control`→501, `/close` unknown→200, terminal-state callback
   fires cleanly. SDP/OnTrack media path validated at G8 e2e (no Pion-loopback test,
   per the agreed scope).
+
+### Phase G3 — stt (Sarvam WS) + audio resampler
+- `internal/gateway/stt/`: port of `app/pipeline/stt.py:transcribe_stream`
+  (CONTRACTS §5). `Client.Run` streams 16 kHz mono s16le over the Sarvam WS and
+  calls `emit` with vad events then one terminal final/error. `sarvam_lang.go` is
+  the bcp47 map ported **verbatim** (full 12-lang map + default en-IN).
+- **Fidelity (side-by-side with stt.py), asserted by an offline gorilla WS test
+  server:** exact query string (params + order via manual build, not `url.Values`
+  which sorts; `saarika:v2.5`→`saarika%3Av2.5`); `Api-Subscription-Key` header;
+  base64 `{"audio":{…}}` framing; `{"type":"flush"}` on end-of-audio; `data`→final
+  (trimmed), `events`→vad, `error`→error, binary/non-JSON ignored.
+- **15 s timeout = wall-clock from BEFORE connect, never idle-reset** (stt.py sets
+  `t0` before `websockets.connect`). Implemented as ONE `context.WithTimeout`
+  covering connect+stream; a vad event does not reset it. `TestRunTimeoutIsWallClock`
+  proves it fires ~500 ms (the budget) not ~800 ms (vad-time + budget). Notably this
+  uses `context.WithTimeout`, not `time.Now()` — the one-origin grep stays == 1.
+- **Drop-oldest mic buffer** (`MicBuffer`, ~400×20 ms ≈ 8 s): `Push` is fully
+  non-blocking (single producer = the audio reader), drops the oldest under
+  backpressure, counts drops in an atomic, logged **once per turn** via `Run`'s
+  defer (not per frame) — same stance as the recorder tee.
+- `internal/gateway/audio/`: the resampler. `Downsampler.Down48to16` decimates
+  48k→16k by keeping every 3rd sample, **stateful** so the phase carries across
+  chunk boundaries. `TestDown48to16PhaseAcrossChunks` asserts sample-exact output
+  over a 4-then-5-sample boundary (not a multiple of 3); a per-chunk reset is caught.
+- **Deviations from stt.py (intentional, called out):** REST `transcribe()` not
+  ported (gateway needs only streaming); `certifi` TLS context dropped (a
+  macOS-Python quirk; Go uses system roots); `metrics.*` calls omitted (no metrics
+  infra; the drop log is the only observability); bcp47 map kept full per "copy
+  verbatim".
+- **Not yet wired (G7):** the live path `OnTrack(audio)` → resample → `MicBuffer`
+  → `stt.Run`, gated per turn, is the turn loop's job; `peer.readAudio` still only
+  tees USER_PCM. The `audio`+`stt` packages are built and tested standalone.
+- New dep (direct): `github.com/gorilla/websocket` (first use; also the `/control`
+  WS in G5).
+- Verified: `go build`/`vet`/`gofmt` clean; full `go test ./...` green; one-origin
+  grep == 1.
 
