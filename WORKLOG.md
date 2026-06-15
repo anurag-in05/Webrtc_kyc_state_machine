@@ -319,6 +319,7 @@ credentials or network.
 | G4 | `tts` (ElevenLabs) + AgentSink seam + upsampler | stub-HTTP tests: plan exec, per-chunk call_us, silence bytes, normal/slow payload, sample-exact upsample | ✅ done |
 | G5 | `control` /control WS + real AgentSink (SendAt) | WS-client tests: text/binary discipline, sink call_us passthrough, tee-survives-WS-drop | ✅ done |
 | G6 | `brainclient` (GET snapshot, POST turn) | round-trips canned CONTRACTS §1 responses field-for-field; failures → error | ✅ done |
+| G7a | live audio wiring: peer `SetMic` gate + 48k→16k downsample in `readAudio` | gate + concurrency (`-race`) tests; full path at G8 | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -570,6 +571,21 @@ credentials or network.
   modes → error. `-race`.
 - No new deps. Verified: build/vet/gofmt clean; full `go test ./...` green; one-origin
   grep == 1.
+
+### Phase G7a — live audio wiring (peer mic gate)
+- `peer.go`: a mutex-guarded settable mic handler (`SetMic`/`feedMic`). `readAudio`
+  now Opus-decodes → tees USER_PCM → downsamples 48k→16k (`audio.Downsampler`) →
+  `feedMic`, which delivers to the handler ONLY while one is set (the
+  listening-window gate). The turn loop (G7b) sets it to the turn's `MicBuffer.Push`
+  at start_turn, clears it at END_SPEECH; idle audio between turns is discarded.
+- One Downsampler per track (phase continuous across turns — correctness over the
+  micro-optimization of skipping decimation when idle, since the user's first word
+  lives at a turn start).
+- Tests (`mic_test.go`): gate (frames outside the window discarded) + `SetMic`
+  racing `feedMic` 1000× under `-race`. Full Opus→downsample→feed path at G8 e2e.
+- `docs/GATEWAY.md`: documented the listening-window gate in OnTrack(audio).
+- Verified: build/vet/gofmt clean; full `go test -race ./internal/gateway/...` green;
+  one-origin grep == 1.
 
 ## G7 checklist (carried forward — do not lose)
 Items deferred to G7 (the turn loop + teardown phase), recorded as we go:

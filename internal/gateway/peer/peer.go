@@ -9,6 +9,7 @@ import (
 	"github.com/pion/opus"
 	"github.com/pion/webrtc/v4"
 
+	"kyc-monorepo/internal/gateway/audio"
 	"kyc-monorepo/internal/gateway/recordclient"
 	recorderpb "kyc-monorepo/proto"
 )
@@ -29,6 +30,29 @@ type Peer struct {
 	pc  *webrtc.PeerConnection
 	rec *recordclient.Client
 	wg  sync.WaitGroup // OnTrack read goroutines; Close waits on them
+
+	micMu sync.Mutex
+	mic   func([]byte) // 16 kHz mic handler for the active turn; nil = discard
+}
+
+// SetMic sets (nil clears) the 16 kHz mic handler — the listening-window gate. The
+// turn loop sets it to the active turn's stt.MicBuffer.Push at start_turn and
+// clears it at END_SPEECH, so STT hears the mic only during a turn, never the idle
+// audio between turns. Concurrency-safe (the audio reader calls feedMic; the turn
+// loop calls SetMic).
+func (p *Peer) SetMic(h func([]byte)) {
+	p.micMu.Lock()
+	p.mic = h
+	p.micMu.Unlock()
+}
+
+func (p *Peer) feedMic(pcm16 []byte) {
+	p.micMu.Lock()
+	h := p.mic
+	p.micMu.Unlock()
+	if h != nil {
+		h(pcm16)
+	}
 }
 
 // New creates the peer from the browser's send-only offer, wires the OnTrack
@@ -122,10 +146,13 @@ func (p *Peer) readVideo(track *webrtc.TrackRemote) {
 }
 
 // readAudio decodes the inbound Opus mic to 48 kHz mono s16le (pure-Go, no
-// encoder) and tees it as USER_PCM. The 48k→16k STT feed lands in G3.
+// encoder), tees it as USER_PCM, and feeds a 48k→16k downsample to the active
+// turn's mic (the listening-window gate). One Downsampler per track keeps the
+// decimation phase continuous; idle frames (no turn active) are discarded.
 func (p *Peer) readAudio(track *webrtc.TrackRemote) {
 	defer p.wg.Done()
 	dec := opus.NewDecoder() // 48 kHz mono output
+	var down audio.Downsampler
 	out := make([]int16, maxOpusFrameSamples)
 	for {
 		pkt, _, err := track.ReadRTP()
@@ -136,7 +163,9 @@ func (p *Peer) readAudio(track *webrtc.TrackRemote) {
 		if err != nil {
 			continue // bad/again packet → drop one frame (degrade, never break)
 		}
-		p.rec.Send(recorderpb.Kind_USER_PCM, int16ToS16LE(out[:n]))
+		pcm48 := int16ToS16LE(out[:n])
+		p.rec.Send(recorderpb.Kind_USER_PCM, pcm48)
+		p.feedMic(down.Down48to16(pcm48)) // → active turn's MicBuffer, or discarded
 	}
 }
 

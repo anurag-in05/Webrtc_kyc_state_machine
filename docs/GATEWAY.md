@@ -51,7 +51,11 @@ One file per job. If `peer` exceeds ~300 lines it's doing two jobs — split.
   keyframe → `recordclient.Send(VIDEO_AU, ts_us, au)`. **No decode.**
 - `OnTrack(audio)`: read RTP → Opus decode (pure-Go) → 48k PCM. Fan out:
   (a) `recordclient.Send(USER_PCM, ts_us, pcm48)`,
-  (b) resample → 16k → into the STT stream for the active turn.
+  (b) resample → 16k → into the STT stream **for the active turn only**. The
+  16k feed goes to a mutex-guarded mic handler on the peer (`SetMic`): the turn
+  loop sets it to the turn's `stt.MicBuffer.Push` at `start_turn` and clears it at
+  `END_SPEECH`. This is the listening-window gate — STT never hears the idle audio
+  between turns. One `Downsampler` per track keeps the decimation phase continuous.
 - agent audio out: the peer is **send-only**, so there is no outbound media
   track. `tts` produces 48k PCM that is (a) teed to the recorder as AGENT_PCM and
   (b) written as **binary frames on the control WS**; the browser plays them via
