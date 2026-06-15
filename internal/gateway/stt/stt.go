@@ -47,12 +47,12 @@ type Event struct {
 // Client is the Sarvam STT client. One per gateway; Run is called per turn.
 type Client struct {
 	apiKey  string
-	wsURL   string        // base WS URL; overridable in tests
+	WSURL   string        // base WS URL; overridable in tests
 	timeout time.Duration // wall-clock budget from before-connect
 }
 
 func New(apiKey string) *Client {
-	return &Client{apiKey: apiKey, wsURL: sarvamWSURL, timeout: streamTimeout}
+	return &Client{apiKey: apiKey, WSURL: sarvamWSURL, timeout: streamTimeout}
 }
 
 // MicBuffer is the bounded, drop-oldest mic feed into one STT turn. Push is
@@ -145,7 +145,7 @@ func (c *Client) buildURL(language string) string {
 		"&sample_rate=" + sampleRate +
 		"&input_audio_codec=pcm_s16le" +
 		"&vad_signals=true"
-	return c.wsURL + "?" + q
+	return c.WSURL + "?" + q
 }
 
 // read is the reader goroutine (stt.py:reader): WS frames → events. Binary and

@@ -320,6 +320,7 @@ credentials or network.
 | G5 | `control` /control WS + real AgentSink (SendAt) | WS-client tests: text/binary discipline, sink call_us passthrough, tee-survives-WS-drop | ✅ done |
 | G6 | `brainclient` (GET snapshot, POST turn) | round-trips canned CONTRACTS §1 responses field-for-field; failures → error | ✅ done |
 | G7a | live audio wiring: peer `SetMic` gate + 48k→16k downsample in `readAudio` | gate + concurrency (`-race`) tests; full path at G8 | ✅ done |
+| G7b | `turnloop` driver (greeting → loop → degradation) + wiring | integration tests (`-race`): both degradation paths; build/boot smoke | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -586,6 +587,44 @@ credentials or network.
 - `docs/GATEWAY.md`: documented the listening-window gate in OnTrack(audio).
 - Verified: build/vet/gofmt clean; full `go test -race ./internal/gateway/...` green;
   one-origin grep == 1.
+
+### Phase G7b — the turn loop (interpretation A)
+- `internal/gateway/turnloop/`: the driver. `Run(ctx, Deps)` greets (Get → speak →
+  agent_done{turn:0}), then loops over start_turn/end. `Deps` is concrete (conn,
+  sink, clock, SetMic, brain/tts/stt clients); the only interface is AgentSink.
+- **Degradation (checklist #2), accurate rule:** the recovery must not require the
+  failed component. Failures the brain CAN respond to → please_repeat (STT failure →
+  empty transcript → brain → please_repeat, same as an intent-classifier failure;
+  the turn advances, attempt_count++). Failures of reaching the brain (transport) or
+  voicing (TTS) → silence-plus-signal (control error naming the unvoiced text +
+  agent_done(active); call continues) — the gateway holds no phrases.
+- **END_SPEECH ordering (checklist #5):** SetMic(nil) THEN mic.CloseInput(). The
+  peer's feedMic now calls the handler UNDER the lock, so SetMic(nil) is a barrier —
+  no Push can be in flight after it returns, so CloseInput (closing the channel)
+  never races a push.
+- **Inbox overflow (checklist #3):** the control reader's send is non-blocking —
+  on a full buffer-of-8 (only if the browser sent control before agent_done, a
+  protocol violation) it drops + logs and keeps reading, so it can always detect a
+  disconnect.
+- **TTS ctx deadline (checklist #1):** speak wraps Speak in
+  context.WithTimeout(ctx, 30s) — bounds connect + streaming; inherits the call ctx
+  so teardown aborts it.
+- Wiring: `call.Registry` builds the gateway clients (brain/tts/stt) once;
+  `StartTurnLoop` builds the concrete Deps and runs the loop; the Call gains a
+  ctx/cancel (Close cancels it, aborting in-flight brain/STT/TTS). `main.go`
+  controlHandler starts the loop after AttachControl.
+- **Endpoint seam:** `stt.Client.WSURL` / `tts.Client.Base` exported (default to the
+  vendor URL) so tests point real clients at stubs — no new interfaces.
+- Tests (`turnloop_test.go`, `-race`): a stub brain/Sarvam-WS/ElevenLabs + control
+  WS harness. `TestSTTFailureFoldsToPleaseRepeat` (STT unreachable → brain.Turn("")
+  asserted → please_repeat spoken, audio frames asserted) and
+  `TestTTSFailureSignalsAndContinues` (TTS 500 → "could not be voiced" error +
+  agent_done(active), no audio, brain called exactly twice over two turns → no
+  double-advance, next turn works).
+- `docs/GATEWAY.md`: deleted the contradictory no-brain pseudocode branch; added the
+  per-side degradation rule.
+- Verified: build/vet/gofmt clean; full `go test -race ./internal/gateway/...` green;
+  one-origin grep == 1; boot smoke (control 404 pre-offer, offer 400).
 
 ## G7 checklist (carried forward — do not lose)
 Items deferred to G7 (the turn loop + teardown phase), recorded as we go:

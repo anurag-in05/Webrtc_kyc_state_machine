@@ -5,14 +5,19 @@
 package call
 
 import (
+	"context"
 	"log"
 	"sync"
 
+	"kyc-monorepo/internal/gateway/brainclient"
 	"kyc-monorepo/internal/gateway/config"
 	"kyc-monorepo/internal/gateway/control"
 	"kyc-monorepo/internal/gateway/peer"
 	"kyc-monorepo/internal/gateway/recordclient"
 	"kyc-monorepo/internal/gateway/session"
+	"kyc-monorepo/internal/gateway/stt"
+	"kyc-monorepo/internal/gateway/tts"
+	"kyc-monorepo/internal/gateway/turnloop"
 	recorderpb "kyc-monorepo/proto"
 )
 
@@ -23,7 +28,10 @@ type Call struct {
 	rec  *recordclient.Client
 
 	conn *control.Conn // attached when the browser opens /control
-	sink *control.Sink // agent-audio sink (the turn loop uses it in G7)
+	sink *control.Sink // agent-audio sink
+
+	ctx    context.Context // cancelled on teardown → aborts in-flight brain/STT/TTS
+	cancel context.CancelFunc
 
 	once sync.Once // teardown happens exactly once (a /close racing a disconnect)
 }
@@ -44,11 +52,13 @@ func (c *Call) AttachControl(conn *control.Conn) {
 	})
 }
 
-// Close tears the call down in order: close the control socket, stop the peer (its
+// Close tears the call down in order: cancel the call ctx (aborts any in-flight
+// brain/STT/TTS in the turn loop), close the control socket, stop the peer (its
 // OnTrack read goroutines exit and flush their final frames to the recorder), then
 // close the recorder stream, then kick the finalize combine. Idempotent.
 func (c *Call) Close() {
 	c.once.Do(func() {
+		c.cancel()
 		if c.conn != nil {
 			c.conn.Close()
 		}
@@ -60,15 +70,41 @@ func (c *Call) Close() {
 	})
 }
 
-// Registry holds the live calls, keyed by session id.
+// StartTurnLoop runs the turn loop for a call once its control socket is attached.
+// It builds the concrete Deps from the call's resources + the gateway's clients.
+func (r *Registry) StartTurnLoop(c *Call) {
+	go turnloop.Run(c.ctx, turnloop.Deps{
+		SessionID: c.sess.ID,
+		Conn:      c.conn,
+		Sink:      c.sink,
+		Clock:     c.sess.CallUS, // the one call-clock origin
+		SetMic:    c.peer.SetMic, // open/close the listening window
+		Brain:     r.brain,
+		TTS:       r.tts,
+		STT:       r.stt,
+	})
+}
+
+// Registry holds the live calls (keyed by session id) and the gateway-wide control
+// clients (one each, built from config).
 type Registry struct {
-	cfg config.Config
-	mu  sync.Mutex
-	m   map[string]*Call
+	cfg   config.Config
+	brain *brainclient.Client
+	tts   *tts.Client
+	stt   *stt.Client
+
+	mu sync.Mutex
+	m  map[string]*Call
 }
 
 func NewRegistry(cfg config.Config) *Registry {
-	return &Registry{cfg: cfg, m: make(map[string]*Call)}
+	return &Registry{
+		cfg:   cfg,
+		brain: brainclient.New(cfg.BrainURL),
+		tts:   tts.New(cfg.ElevenLabsAPIKey),
+		stt:   stt.New(cfg.SarvamAPIKey),
+		m:     make(map[string]*Call),
+	}
 }
 
 func (r *Registry) Get(id string) (*Call, bool) {
@@ -115,8 +151,9 @@ func (r *Registry) Start(id, offerSDP string) (string, error) {
 		rec.Close()
 		return "", err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	r.mu.Lock()
-	r.m[id] = &Call{sess: sess, peer: p, rec: rec}
+	r.m[id] = &Call{sess: sess, peer: p, rec: rec, ctx: ctx, cancel: cancel}
 	r.mu.Unlock()
 	return answer, nil
 }

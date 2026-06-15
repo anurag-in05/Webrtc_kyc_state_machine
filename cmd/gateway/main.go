@@ -85,6 +85,7 @@ func controlHandler(reg *call.Registry) http.HandlerFunc {
 			return // Upgrade already wrote the HTTP error
 		}
 		c.AttachControl(conn)
+		reg.StartTurnLoop(c) // greeting → turns → agent_done
 	}
 }
 

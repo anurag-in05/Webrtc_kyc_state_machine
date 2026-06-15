@@ -76,7 +76,8 @@ loop until peer closed:
   msg = <-control.Inbox
   if msg.type == "start_turn":
      transcript, vadEvents = stt.Run(micPCM16k)   // forward vad to control as they arrive
-     if no final transcript: control.Send(error); continue
+     // STT failure (timeout/error) → transcript = "". DO NOT short-circuit: still
+     // call the brain, which returns please_repeat for an empty transcript.
      resp = brainclient.Turn(session_id, transcript)   // {agent_text, tts_plan, status, events,...}
      control.Send(final{...resp...})
      if resp.agent_text != "": speak(resp.tts_plan, resp.turn_index)
@@ -84,6 +85,16 @@ loop until peer closed:
      if resp.status != "active": break
   if msg.type == "end": break
 ```
+
+**Degradation — the recovery must not require the failed component.** Failures the
+brain *can respond to* converge on please_repeat: an STT failure yields an empty
+transcript, which the brain turns into please_repeat exactly as an intent-classifier
+failure does (the turn advances, `attempt_count++`, same step — three-strikes works
+for free). Failures of *reaching* the brain (transport error) or of *voicing* a
+reply (TTS error) degrade to silence-plus-signal: the gateway holds no phrases, so
+it cannot synthesize please_repeat itself — it sends a control `error` (naming the
+unvoiced text, so the UI can fall back to the already-sent `final`) + `agent_done`,
+and the call continues.
 
 `speak(plan, turn)`: for each plan item — `speech` → `tts.Stream(text, voice_id,
 model_id, slow, speed)` → for each PCM chunk: resample 24k→48k, send it as a

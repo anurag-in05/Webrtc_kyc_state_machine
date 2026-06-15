@@ -78,7 +78,7 @@ func counter() func() uint64 {
 // sink call carries a fresh call_us sampled by the executor.
 func TestSpeakExecutesPlan(t *testing.T) {
 	url, _ := stubElevenLabs(t, http.StatusOK, pcm16(100, 200, 300))
-	c := &Client{apiKey: "k", base: url}
+	c := &Client{apiKey: "k", Base: url}
 	sink := &fakeSink{}
 
 	plan := []PlanItem{
@@ -128,7 +128,7 @@ func TestSpeakExecutesPlan(t *testing.T) {
 // the right headers and a payload that carries speed and stability 0.5.
 func TestSpeakRequestNormal(t *testing.T) {
 	url, reqCh := stubElevenLabs(t, http.StatusOK, nil)
-	c := &Client{apiKey: "secret", base: url}
+	c := &Client{apiKey: "secret", Base: url}
 	if err := c.Speak(context.Background(), []PlanItem{{Kind: "speech", Text: "hi", Speed: 1.1}}, "voiceN", "modelN", &fakeSink{}, counter()); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestSpeakRequestNormal(t *testing.T) {
 // TestSpeakRequestSlow: a slow (<var>) segment uses stability 0.7 and OMITS speed.
 func TestSpeakRequestSlow(t *testing.T) {
 	url, reqCh := stubElevenLabs(t, http.StatusOK, nil)
-	c := &Client{apiKey: "secret", base: url}
+	c := &Client{apiKey: "secret", Base: url}
 	if err := c.Speak(context.Background(), []PlanItem{{Kind: "speech", Text: "9, 8, 7.", Slow: true}}, "voiceS", "modelS", &fakeSink{}, counter()); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestSpeakRequestSlow(t *testing.T) {
 // TestSpeakElevenLabsError: a non-200 ends Speak with an error (turn → please_repeat).
 func TestSpeakElevenLabsError(t *testing.T) {
 	url, _ := stubElevenLabs(t, http.StatusInternalServerError, nil)
-	c := &Client{apiKey: "k", base: url}
+	c := &Client{apiKey: "k", Base: url}
 	if err := c.Speak(context.Background(), []PlanItem{{Kind: "speech", Text: "x"}}, "v", "m", &fakeSink{}, counter()); err == nil {
 		t.Fatal("want an error on ElevenLabs 500")
 	}

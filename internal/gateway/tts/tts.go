@@ -37,11 +37,11 @@ type PlanItem struct {
 // Client is the TTS executor. One per gateway; Speak is called per agent turn.
 type Client struct {
 	apiKey string
-	base   string // ElevenLabs base URL; overridable in tests
+	Base   string // ElevenLabs base URL; overridable in tests
 }
 
 func New(apiKey string) *Client {
-	return &Client{apiKey: apiKey, base: elevenLabsBase}
+	return &Client{apiKey: apiKey, Base: elevenLabsBase}
 }
 
 // Speak executes a tts_plan, emitting 48 kHz mono s16le PCM to sink. For each

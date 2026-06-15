@@ -19,7 +19,7 @@ const (
 // digits) uses clear-enunciation settings and omits the speed field; everything
 // else carries `speed`. onChunk receives a buffer it must not retain past the call.
 func (c *Client) stream(ctx context.Context, text, voiceID, modelID string, slow bool, speed float64, onChunk func([]byte) error) error {
-	url := c.base + "/" + voiceID + "/stream?output_format=pcm_24000"
+	url := c.Base + "/" + voiceID + "/stream?output_format=pcm_24000"
 	body, _ := json.Marshal(buildPayload(text, modelID, slow, speed))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

@@ -30,8 +30,8 @@ func wsServer(t *testing.T, handle func(conn *websocket.Conn, r *http.Request)) 
 	return "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
-func testClient(wsURL string, timeout time.Duration) *Client {
-	return &Client{apiKey: "test-key", wsURL: wsURL, timeout: timeout}
+func testClient(WSURL string, timeout time.Duration) *Client {
+	return &Client{apiKey: "test-key", WSURL: WSURL, timeout: timeout}
 }
 
 // TestRunFidelity checks the wire framing against stt.py: the exact query string
@@ -46,7 +46,7 @@ func TestRunFidelity(t *testing.T) {
 	var cap capture
 	done := make(chan struct{})
 
-	wsURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
+	WSURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
 		cap.query = r.URL.RawQuery
 		cap.header = r.Header.Get("Api-Subscription-Key")
 		for {
@@ -82,7 +82,7 @@ func TestRunFidelity(t *testing.T) {
 	mic.CloseInput()
 
 	var got []Event
-	testClient(wsURL, time.Second).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
+	testClient(WSURL, time.Second).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
 	<-done // synchronize the captured fields
 
 	wantQuery := "language-code=en-IN&model=saarika%3Av2.5&sample_rate=16000&input_audio_codec=pcm_s16le&vad_signals=true"
@@ -116,7 +116,7 @@ func TestRunFidelity(t *testing.T) {
 
 // TestRunVendorError: a Sarvam error event becomes a terminal error (no transcript).
 func TestRunVendorError(t *testing.T) {
-	wsURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
+	WSURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":{"error":"boom"}}`))
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -129,7 +129,7 @@ func TestRunVendorError(t *testing.T) {
 	mic.CloseInput()
 
 	var got []Event
-	testClient(wsURL, time.Second).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
+	testClient(WSURL, time.Second).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
 
 	if len(got) != 1 || got[0].Type != "error" || got[0].Message != "boom" {
 		t.Fatalf("got %+v, want one error{boom}", got)
@@ -141,7 +141,7 @@ func TestRunVendorError(t *testing.T) {
 // with a 500 ms budget the timeout must fire ~500 ms after connect. An idle-reset
 // would push it to 300+500 = 800 ms, so we assert Run finishes well before then.
 func TestRunTimeoutIsWallClock(t *testing.T) {
-	wsURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
+	WSURL := wsServer(t, func(conn *websocket.Conn, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events","data":{"signal_type":"START_SPEECH","occured_at":0.3}}`))
 		for { // hold the connection open, send no data
@@ -155,7 +155,7 @@ func TestRunTimeoutIsWallClock(t *testing.T) {
 	var got []Event
 	done := make(chan struct{})
 	go func() {
-		testClient(wsURL, 500*time.Millisecond).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
+		testClient(WSURL, 500*time.Millisecond).Run(context.Background(), "english", mic, func(e Event) { got = append(got, e) })
 		close(done)
 	}()
 

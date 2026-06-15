@@ -46,12 +46,16 @@ func (p *Peer) SetMic(h func([]byte)) {
 	p.micMu.Unlock()
 }
 
+// feedMic delivers a 16 kHz frame to the active handler UNDER the lock, so that
+// SetMic(nil) is a barrier: once it returns, no handler call can still be in
+// flight. The turn loop relies on this to do SetMic(nil) then mic.CloseInput()
+// without the audio reader ever pushing to a closed MicBuffer. (The handler —
+// MicBuffer.Push — is non-blocking, so holding the lock is bounded.)
 func (p *Peer) feedMic(pcm16 []byte) {
 	p.micMu.Lock()
-	h := p.mic
-	p.micMu.Unlock()
-	if h != nil {
-		h(pcm16)
+	defer p.micMu.Unlock()
+	if p.mic != nil {
+		p.mic(pcm16)
 	}
 }
 

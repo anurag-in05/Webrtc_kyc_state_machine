@@ -7,6 +7,7 @@ package control
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 
@@ -57,7 +58,16 @@ func (c *Conn) read() {
 		}
 		var msg Inbound
 		if json.Unmarshal(data, &msg) == nil && msg.Type != "" {
-			c.inbox <- msg
+			// Non-blocking: never stall the reader (a stalled reader can't detect a
+			// disconnect). The buffer (8) only fills if the browser sends control
+			// faster than the turn loop consumes — i.e. it sent start_turn without
+			// waiting for agent_done, a protocol violation. Then we drop + log; the
+			// browser can retry.
+			select {
+			case c.inbox <- msg:
+			default:
+				log.Printf("control: inbox full, dropping %q (control sent before agent_done)", msg.Type)
+			}
 		}
 	}
 }
