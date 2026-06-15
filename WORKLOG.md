@@ -316,6 +316,7 @@ credentials or network.
 | G2a | `peer` H.264 depacketizer + SPS/PPS cache | synthetic-RTP tests: drop-until-keyframe, inline param sets, FU-A, teardown flush | ✅ done |
 | G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; build + boot smoke; SDP/OnTrack at G8 e2e | ✅ done |
 | G3 | `stt` (Sarvam WS) + `audio` resampler | offline WS-server tests: framing fidelity, vendor error, wall-clock timeout, drop-oldest, sample-exact resample | ✅ done |
+| G4 | `tts` (ElevenLabs) + AgentSink seam + upsampler | stub-HTTP tests: plan exec, per-chunk call_us, silence bytes, normal/slow payload, sample-exact upsample | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -484,4 +485,51 @@ credentials or network.
   WS in G5).
 - Verified: `go build`/`vet`/`gofmt` clean; full `go test ./...` green; one-origin
   grep == 1.
+
+### Phase G4 — tts (ElevenLabs) + AgentSink seam + upsampler
+- `internal/gateway/tts/`: executes a brain-built `tts_plan` (CONTRACTS §4) into
+  agent audio. `elevenlabs.go` ports `tts.py:_stream_one` (HTTP stream → 24k PCM);
+  `tts.go` holds the `AgentSink` seam, `PlanItem`, and `Speak` (the executor). No
+  markup/`<var>` splitting, no voice/model resolution — those are the brain's job;
+  the gateway gets the resolved plan + `voiceID`/`modelID`.
+- **Stamping rule (pinned with the user):** `Speak` samples `clock()` ONCE per
+  chunk and passes that `call_us` into `WriteAgentAudio(pcm48, callUS)`; the sink
+  must not sample the clock, so the recorder tee and the browser send carry the
+  identical timestamp for the same bytes. Test asserts `call_us` = 1000,2000,3000…
+  (one sample per sink call).
+- **Silence bypasses the upsampler:** zeros upsample to zeros, so the executor
+  emits `48000·ms/1000·2` zero bytes directly at 48k (no HTTP, no interpolation);
+  test asserts a 200 ms item → exactly 19200 zero bytes.
+- **AgentSink seam (the third carry-over):** one method
+  `WriteAgentAudio(pcm48, callUS) error` — the only interface in the gateway. Doc
+  pins today's impl (control-WS binary frame + `AGENT_PCM` tee) and the planned
+  A→B swap (outbound Opus track) as a second impl. The real impl + `recordclient.
+  SendAt` land with the control WS in **G5** (no dead code now).
+- **Fidelity (stub-HTTP tests):** exact path `/{voice}/stream?output_format=pcm_24000`,
+  `xi-api-key` + JSON headers, normal payload carries `speed` & `stability:0.5`,
+  slow payload OMITS `speed` (`Speed *float64` + `omitempty`) & uses `stability:0.7`,
+  non-200 → error.
+- `internal/gateway/audio/upsampler.go`: stateful ×2 linear-interp `Upsampler`
+  (`a, mid(a,b)`; `Flush` duplicates the final held sample → exactly 2×). Sample-
+  exact test splits at an odd (1-sample) boundary and asserts byte-identical output
+  to the whole segment.
+- **Deviations from tts.py (intentional):** markup splitting + voice/model
+  resolution are the brain's; `metrics.*` omitted; pooled `httpx` → `http.DefaultClient`;
+  **no `http.Client.Timeout`** (it bounds the whole request and would truncate
+  streaming audio) — the request is bounded by the `ctx` the turn loop passes (G7).
+- No new deps (stdlib `net/http`). Not wired live until G7 (the turn loop calls
+  `Speak`). Verified: build/vet/gofmt clean; full `go test ./...` green (incl.
+  `-race`); one-origin grep == 1.
+
+## G7 checklist (carried forward — do not lose)
+Items deferred to G7 (the turn loop + teardown phase), recorded as we go:
+1. **TTS ctx deadline.** The turn loop MUST pass a deadline `ctx` to `tts.Speak`
+   (G4 has no `http.Client.Timeout` by design — it would truncate streaming); the
+   connect-bound is decided here too.
+2. **Degradation symmetry.** STT timeout, TTS non-200, and intent-classifier
+   failure must ALL fold to `please_repeat` with identical user-visible behavior
+   (hard-invariant 2). One code path, verified.
+3. **Live audio wiring.** `OnTrack(audio)` → `audio.Downsampler` (48k→16k) →
+   `stt.MicBuffer` → `stt.Run`, gated per turn (G3's scope note). `peer.readAudio`
+   currently only tees USER_PCM.
 
