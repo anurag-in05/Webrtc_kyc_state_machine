@@ -21,11 +21,18 @@ type videoWriter struct {
 	path string
 	ch   chan auFrame
 	done chan struct{}
+
+	// firstCallUS is the shared-clock (call_us) time of the first kept keyframe —
+	// the video stream's t=0 on the call clock, used at finalize to delay video
+	// for lip-sync (audio starts at call_us 0). Read ONLY after close() returns,
+	// when the mux goroutine has ended.
+	firstCallUS uint64
 }
 
 type auFrame struct {
-	tsUS uint64
-	data []byte
+	tsUS   uint64
+	callUS uint64
+	data   []byte
 }
 
 func newVideoWriter(path string) *videoWriter {
@@ -40,11 +47,11 @@ func newVideoWriter(path string) *videoWriter {
 
 // send enqueues one access unit. Never blocks: if the mux can't keep up we drop
 // the frame. Degrades the recording; never stalls the call (invariant 4).
-func (w *videoWriter) send(tsUS uint64, au []byte) {
+func (w *videoWriter) send(tsUS, callUS uint64, au []byte) {
 	b := make([]byte, len(au)) // copy: we don't own the gRPC buffer past this call
 	copy(b, au)
 	select {
-	case w.ch <- auFrame{tsUS: tsUS, data: b}:
+	case w.ch <- auFrame{tsUS: tsUS, callUS: callUS, data: b}:
 	default:
 		log.Printf("recorder: video buffer full, dropping access unit")
 	}
@@ -70,9 +77,10 @@ func (w *videoWriter) run() {
 
 	var st muxState
 	for au := range w.ch {
-		st.handle(f, au.tsUS, au.data)
+		st.handle(f, au.tsUS, au.callUS, au.data)
 	}
-	st.finalize(f) // flush the held sample + last fragment on clean stop
+	st.finalize(f)                 // flush the held sample + last fragment on clean stop
+	w.firstCallUS = st.firstCallUS // safe: close() reads this only after we return
 }
 
 const (
@@ -83,8 +91,9 @@ const (
 // muxState is the fragmented-MP4 state machine. It lives entirely on the mux
 // goroutine, so it needs no locks.
 type muxState struct {
-	started   bool
-	firstTS90 uint64 // 90kHz timestamp of the first kept keyframe
+	started     bool
+	firstTS90   uint64 // 90kHz timestamp of the first kept keyframe
+	firstCallUS uint64 // shared-clock (call_us) of the first kept keyframe — video t=0 for the A/V offset
 
 	seq  uint32        // fragment sequence number (1-based)
 	frag *mp4.Fragment // fragment currently being filled
@@ -101,7 +110,7 @@ type muxState struct {
 
 func usTo90k(tsUS uint64) uint64 { return tsUS * 9 / 100 } // 90000 / 1_000_000
 
-func (m *muxState) handle(f *os.File, tsUS uint64, au []byte) {
+func (m *muxState) handle(f *os.File, tsUS, callUS uint64, au []byte) {
 	ts90 := usTo90k(tsUS)
 
 	sample, isKey, ok := buildSample(au)
@@ -127,6 +136,7 @@ func (m *muxState) handle(f *os.File, tsUS uint64, au []byte) {
 		}
 		m.started = true
 		m.firstTS90 = ts90
+		m.firstCallUS = callUS // first kept keyframe → video t=0 on the call clock
 		m.seq = 1
 		m.frag, _ = mp4.CreateFragment(m.seq, 1) // trackID = 1
 		m.setPending(0, sample, true)            // first sample's relative dts is 0

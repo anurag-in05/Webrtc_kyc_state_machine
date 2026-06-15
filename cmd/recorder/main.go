@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"net/http"
 	"os"
 
 	"google.golang.org/grpc"
@@ -13,13 +14,23 @@ import (
 
 func main() {
 	grpcAddr := getenv("GRPC_ADDR", ":9091")
+	httpAddr := getenv("HTTP_ADDR", ":9090")
 	dir := getenv("RECORDINGS_DIR", "./recordings")
 
+	// HTTP control plane: /finalize + /status. Runs in its own goroutine.
+	api := recorder.NewHTTPAPI(dir)
+	go func() {
+		log.Printf("recorder: HTTP on %s", httpAddr)
+		if err := http.ListenAndServe(httpAddr, api.Handler()); err != nil {
+			log.Fatalf("http serve: %v", err)
+		}
+	}()
+
+	// gRPC media plane: the frame ingest stream.
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
 		log.Fatalf("listen %s: %v", grpcAddr, err)
 	}
-
 	srv := grpc.NewServer()
 	recorderpb.RegisterRecorderServer(srv, recorder.NewService(dir))
 

@@ -103,7 +103,7 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
 | 0 | git baseline (steps 1-3) | repo inits, baseline commit clean | ✅ done |
 | 1 | four principles in CLAUDE.md + this worklog | section added, committed | ✅ done |
 | 2 | contract: add `call_us`, regen pb.go, update CONTRACTS §3 | `go build ./...` clean, diff = new field only | ✅ done |
-| 3 | apply Step 4 w/ fix (finalize, httpapi, session, videowriter, main) | `go build` + `go vet` clean | ⏳ |
+| 3 | apply Step 4 w/ fix (finalize, httpapi, session, videowriter, main) | `go build` + `go vet` clean | ✅ done |
 | 4 | targeted alignment test | gapped agent burst lands at correct offset | ⏳ |
 
 ### Phase 0 — git baseline
@@ -130,3 +130,26 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
   pinning `ts_us` per-stream vs `call_us` shared, the silence-fill rule, and the
   explicit guarantee that the gateway need NOT send continuous audio.
 - Result: `go build ./...` exit 0, `go vet` exit 0.
+
+### Phase 3 — apply Step 4 with the fix baked in
+- **`session.go`** (the fix): PCM frames positioned by `call_us` via
+  `appendPCM` (offset `call_us*48000/1e6*2`, gap→silence, clamp-no-pad on
+  reorder); tracks `userBytes`/`agentBytes` cursors; no first-frame/origin state.
+  `writeMeta` persists `video_first_call_us`.
+- **`videowriter.go`**: threaded `callUS` through `send`/`auFrame`/`handle`;
+  captures `firstCallUS` at the first kept keyframe (read after the mux goroutine
+  ends). No wall-clock fields — the offset is now exact capture-time.
+- **`finalize.go`** (new): combine/`buildFFmpegArgs` brought in verbatim (stream-
+  copy video, `amerge+pan` user→L/agent→R, four status branches, audio-only
+  fallback). Only `recordingMeta`/`videoOffsetSeconds` changed — offset now reads
+  `video_first_call_us` (audio is at call_us 0, so offset = video's first
+  keyframe time).
+- **`httpapi.go`** (new): `POST /finalize` (202, async) + `GET /status`, verbatim.
+- **`main.go`**: starts HTTP (:9090) alongside gRPC (:9091).
+- **`server.go`** / **`testhooks.go`**: pass `frame.CallUs`; test hook keeps its
+  2-arg signature (passes tsUS as callUS) so `cmd/videotest` is untouched.
+- Result: `go build ./...` exit 0, `go vet ./...` exit 0. My edited lines + all
+  new files are gofmt-clean. Pre-existing gofmt issues (import order / struct
+  packing / missing EOF newlines) in `server.go`, `testhooks.go`,
+  `videowriter.go`, `cmd/feedtest`, `cmd/videotest` were left untouched per
+  Surgical Changes — they predate this work (baseline already flags them).

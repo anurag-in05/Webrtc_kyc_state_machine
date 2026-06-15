@@ -42,7 +42,7 @@ func (svc *service) RecordStream(stream recorderpb.Recorder_RecordStreamServer) 
 			log.Printf("recorder: session %s started, dir=%s", sess.id, sess.dir)
 		}
 
-		if err := sess.write(frame.Kind, frame.TsUs, frame.Data); err != nil {
+		if err := sess.write(frame.Kind, frame.TsUs, frame.CallUs, frame.Data); err != nil {
 			// Invariant 4: a write failure degrades the recording, it does
 			// NOT kill the call. Log, drop the frame, keep reading.
 			log.Printf("recorder: session %s write %v: %v", sess.id, frame.Kind, err)

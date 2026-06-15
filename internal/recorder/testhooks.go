@@ -7,5 +7,5 @@ type VideoWriterTest struct{ w *videoWriter }
 func NewVideoWriterForTest(path string) *VideoWriterTest {
 	return &VideoWriterTest{w: newVideoWriter(path)}
 }
-func (t *VideoWriterTest) Send(tsUS uint64, au []byte) { t.w.send(tsUS, au) }
+func (t *VideoWriterTest) Send(tsUS uint64, au []byte) { t.w.send(tsUS, tsUS, au) } // callUS irrelevant to this writer-only test
 func (t *VideoWriterTest) Close()                      { t.w.close() }
