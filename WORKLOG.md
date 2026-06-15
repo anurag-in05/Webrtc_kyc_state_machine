@@ -317,6 +317,7 @@ credentials or network.
 | G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; build + boot smoke; SDP/OnTrack at G8 e2e | ✅ done |
 | G3 | `stt` (Sarvam WS) + `audio` resampler | offline WS-server tests: framing fidelity, vendor error, wall-clock timeout, drop-oldest, sample-exact resample | ✅ done |
 | G4 | `tts` (ElevenLabs) + AgentSink seam + upsampler | stub-HTTP tests: plan exec, per-chunk call_us, silence bytes, normal/slow payload, sample-exact upsample | ✅ done |
+| G5 | `control` /control WS + real AgentSink (SendAt) | WS-client tests: text/binary discipline, sink call_us passthrough, tee-survives-WS-drop | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -520,6 +521,35 @@ credentials or network.
 - No new deps (stdlib `net/http`). Not wired live until G7 (the turn loop calls
   `Speak`). Verified: build/vet/gofmt clean; full `go test ./...` green (incl.
   `-race`); one-origin grep == 1.
+
+### Phase G5 — /control WS + the first real AgentSink
+- `internal/gateway/control/`: the browser ⇄ gateway control socket (CONTRACTS §2).
+  `Conn` wraps one WebSocket carrying two frame kinds — TEXT = JSON control, BINARY
+  = agent audio out. A single reader goroutine dispatches inbound by type (text →
+  `Inbox`; binary inbound ignored) and closes `Inbox` on the socket drop. Outbound
+  `SendVAD/SendFinal/SendAgentDone/SendError` (text) and `SendAudio` (binary) are
+  serialized by a **`writeMu`** — gorilla permits only one concurrent writer, and
+  the turn loop's events race the sink's audio otherwise.
+- **First real `AgentSink` (`control.Sink`):** `WriteAgentAudio(pcm48, callUS)` tees
+  to the recorder THEN writes the browser frame. **Tee-first** so the recording —
+  the evidence — survives a mid-utterance WS drop; the browser write then errors and
+  the executor ends the turn. call_us is used as-is (no clock sampling), wired in
+  `call.AttachControl` to `rec.SendAt(AGENT_PCM, callUS, pcm)`.
+- **`recordclient.SendAt(kind, callUS, data)`:** the explicit-call_us path for the
+  agent tee; `Send` is now sugar over it (video/user sample the clock internally).
+  One-origin grep stays == 1. Test positions an AGENT_PCM frame at
+  `pcmByteOffset(500ms)` from an explicit call_us.
+- `cmd/gateway/main.go`: `controlHandler` → 404 if `/control` precedes `/offer`,
+  else upgrade + `AttachControl`. `Call.Close` closes the socket first.
+- Tests (offline, real gorilla WS client): frame discipline (start_turn in → Inbox;
+  vad/agent_done/error out as text; audio out as binary, byte-exact); sink call_us
+  passthrough; tee-survives-WS-drop (tee happens, `SendAudio` errors). Run with `-race`.
+- **Not wired until G7:** the turn loop drives `conn.Inbox()` + the sink (greeting →
+  turns → agent_done). A G5 browser attaches but gets no turn response; `Inbox`
+  buffers (8) until G7 drains it.
+- No new deps (gorilla already present). Verified: build/vet/gofmt clean; full
+  `go test ./...` green (incl. `-race`); one-origin grep == 1; boot smoke
+  (control-before-offer → 404).
 
 ## G7 checklist (carried forward — do not lose)
 Items deferred to G7 (the turn loop + teardown phase), recorded as we go:

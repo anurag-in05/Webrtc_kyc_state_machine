@@ -14,6 +14,7 @@ import (
 
 	"kyc-monorepo/internal/gateway/call"
 	"kyc-monorepo/internal/gateway/config"
+	"kyc-monorepo/internal/gateway/control"
 )
 
 func main() {
@@ -68,11 +69,22 @@ func offerHandler(reg *call.Registry) http.HandlerFunc {
 	}
 }
 
-// controlHandler is the /control WebSocket (CONTRACTS §2): JSON control in,
-// JSON events + binary agent audio out. Upgrade + protocol land in G5.
+// controlHandler is the /control WebSocket (CONTRACTS §2): JSON control in, JSON
+// events + binary agent audio out. It upgrades and attaches the socket to the
+// existing call; the turn loop that drives it (greeting → turns → agent_done)
+// lands in G7.
 func controlHandler(reg *call.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "control websocket lands in G5", http.StatusNotImplemented)
+		c, ok := reg.Get(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "unknown session", http.StatusNotFound) // /control before /offer
+			return
+		}
+		conn, err := control.Upgrade(w, r)
+		if err != nil {
+			return // Upgrade already wrote the HTTP error
+		}
+		c.AttachControl(conn)
 	}
 }
 

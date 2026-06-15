@@ -229,3 +229,28 @@ func TestRecorderDownDegradesNotFails(t *testing.T) {
 		t.Fatal("Close hung with the recorder down")
 	}
 }
+
+// TestSendAtUsesExplicitCallUS: the agent path's explicit-call_us send positions
+// the frame at the byte offset that call_us maps to — not a re-sampled clock value.
+func TestSendAtUsesExplicitCallUS(t *testing.T) {
+	addr, dir := startRecorder(t)
+	sess := session.New("at")
+	c, err := New(sess, addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SendAt(recorderpb.Kind_AGENT_PCM, 500_000, filled(0x77)) // explicit 500 ms
+	c.Close()
+
+	agent, err := os.ReadFile(filepath.Join(dir, "at", "agent.pcm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := pcmByteOffset(500_000) // 48000 bytes of leading silence
+	if int64(len(agent)) != off+tFrameBytes {
+		t.Fatalf("agent.pcm = %d bytes, want %d (frame not at the explicit call_us offset)", len(agent), off+tFrameBytes)
+	}
+	if !allBytes(agent[:off], 0x00) || !allBytes(agent[off:], 0x77) {
+		t.Error("frame not positioned at pcmByteOffset(500ms)")
+	}
+}

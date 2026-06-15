@@ -9,9 +9,11 @@ import (
 	"sync"
 
 	"kyc-monorepo/internal/gateway/config"
+	"kyc-monorepo/internal/gateway/control"
 	"kyc-monorepo/internal/gateway/peer"
 	"kyc-monorepo/internal/gateway/recordclient"
 	"kyc-monorepo/internal/gateway/session"
+	recorderpb "kyc-monorepo/proto"
 )
 
 // Call is one live call's resources.
@@ -19,6 +21,10 @@ type Call struct {
 	sess *session.Session
 	peer *peer.Peer
 	rec  *recordclient.Client
+
+	conn *control.Conn // attached when the browser opens /control
+	sink *control.Sink // agent-audio sink (the turn loop uses it in G7)
+
 	once sync.Once // teardown happens exactly once (a /close racing a disconnect)
 }
 
@@ -27,11 +33,25 @@ func (c *Call) Reoffer(offerSDP string) (string, error) {
 	return c.peer.Reoffer(offerSDP)
 }
 
-// Close tears the call down in order: stop the peer (its OnTrack read goroutines
-// exit and flush their final frames to the recorder), then close the recorder
-// stream, then kick the finalize combine. Idempotent.
+// AttachControl binds the browser control socket to the call and builds the agent
+// sink: it tees agent audio to the recorder as AGENT_PCM with the executor's
+// call_us passed straight through (no clock sampling here). The turn loop (G7)
+// drives conn.Inbox() and c.sink.
+func (c *Call) AttachControl(conn *control.Conn) {
+	c.conn = conn
+	c.sink = control.NewSink(conn, func(pcm48 []byte, callUS uint64) {
+		c.rec.SendAt(recorderpb.Kind_AGENT_PCM, callUS, pcm48)
+	})
+}
+
+// Close tears the call down in order: close the control socket, stop the peer (its
+// OnTrack read goroutines exit and flush their final frames to the recorder), then
+// close the recorder stream, then kick the finalize combine. Idempotent.
 func (c *Call) Close() {
 	c.once.Do(func() {
+		if c.conn != nil {
+			c.conn.Close()
+		}
 		c.peer.Close() // waits for read goroutines → all media Sends done
 		c.rec.Close()  // half-close the recorder stream (it flushes files)
 		if err := c.rec.Finalize(); err != nil {

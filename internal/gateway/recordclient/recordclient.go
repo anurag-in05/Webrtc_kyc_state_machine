@@ -67,11 +67,20 @@ func New(sess *session.Session, grpcAddr, httpURL string) (*Client, error) {
 	return c, nil
 }
 
-// Send stamps the frame from the call clock and enqueues it. Non-blocking: if the
-// queue is full the frame is dropped (never block the media reader). The data is
-// copied — the caller may reuse its buffer after this returns.
+// Send stamps the frame from the call clock and enqueues it — for video and user
+// audio, which are sent the moment they're received. The caller supplies no
+// timestamp, so it cannot supply a wrong one.
 func (c *Client) Send(kind recorderpb.Kind, data []byte) {
-	callUS := c.sess.CallUS() // THE only source of call_us
+	c.SendAt(kind, c.sess.CallUS(), data) // THE only source of call_us for this path
+}
+
+// SendAt enqueues a frame with an EXPLICIT call_us — for the agent path, where the
+// plan executor samples session.CallUS() once per chunk and that single value must
+// reach both the browser send and this recorder tee (so they carry the identical
+// timestamp for the same bytes). call_us MUST come from session.CallUS() (the one
+// origin); do not invent it. Non-blocking: a full queue drops the frame (never
+// block the media reader). The data is copied — the caller may reuse its buffer.
+func (c *Client) SendAt(kind recorderpb.Kind, callUS uint64, data []byte) {
 	if !c.tsSet[kind] {
 		c.tsOrigin[kind] = callUS
 		c.tsSet[kind] = true
