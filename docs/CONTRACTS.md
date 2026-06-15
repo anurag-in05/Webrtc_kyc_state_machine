@@ -173,12 +173,35 @@ message Frame {
   Kind   kind       = 2;
   uint64 ts_us      = 3;   // monotonic microseconds from first frame of this stream
   bytes  data       = 4;   // VIDEO_AU: one H264 access unit (Annex-B). *_PCM: s16le mono 48kHz
+  uint64 call_us    = 5;   // SHARED per-call origin (see "Timestamps" below). Load-bearing.
 }
 message Ack { uint64 frames = 1; }
 ```
 
 One stream per session. The first `VIDEO_AU` the recorder keeps must be a
 keyframe (drop until one arrives). PCM is 48 kHz mono s16le for both kinds.
+
+**Timestamps (load-bearing for A/V alignment).** Two clocks travel on every
+frame:
+
+- `ts_us` is **per-stream** — microseconds since *that* stream's first frame.
+  The recorder uses it only for video-frame pacing inside the MP4 writer.
+- `call_us` is the **shared call clock** — microseconds since one per-call
+  origin (t=0), stamped identically on `VIDEO_AU`, `USER_PCM`, and `AGENT_PCM`.
+  The gateway MUST drive all three from this single clock.
+
+The recorder aligns everything off `call_us`, never off arrival time:
+
+- It writes each PCM frame at byte offset `call_us * 48000 / 1_000_000 * 2`,
+  **filling inter-frame gaps with silence (zero bytes)**. So sample 0 of
+  `user.pcm` and `agent.pcm` is `call_us == 0`, and a stream that starts late
+  carries leading silence. Consequently the **gateway is NOT required to send
+  continuous audio** — it may tee agent audio only while the agent speaks; the
+  recorder reconstructs the full-length, call-aligned track from `call_us`.
+  (A frame whose `call_us` lands behind the write cursor — reorder/jitter — is
+  appended in place; the recorder never seeks backward.)
+- The video lip-sync offset at finalize is the first kept keyframe's `call_us`
+  (delay video by that amount). One origin, one offset mechanism.
 
 ### POST `/sessions/{id}/finalize`  — gateway
 Kicks the ffmpeg combine + S3 upload (async). Returns immediately.

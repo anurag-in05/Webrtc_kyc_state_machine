@@ -76,8 +76,9 @@ type Frame struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Kind          Kind                   `protobuf:"varint,2,opt,name=kind,proto3,enum=recorder.Kind" json:"kind,omitempty"`
-	TsUs          uint64                 `protobuf:"varint,3,opt,name=ts_us,json=tsUs,proto3" json:"ts_us,omitempty"` // monotonic microseconds since this stream's first frame
-	Data          []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`              // VIDEO_AU: one H264 access unit (Annex-B). *_PCM: s16le mono 48kHz
+	TsUs          uint64                 `protobuf:"varint,3,opt,name=ts_us,json=tsUs,proto3" json:"ts_us,omitempty"`       // monotonic microseconds since this stream's first frame
+	Data          []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`                    // VIDEO_AU: one H264 access unit (Annex-B). *_PCM: s16le mono 48kHz
+	CallUs        uint64                 `protobuf:"varint,5,opt,name=call_us,json=callUs,proto3" json:"call_us,omitempty"` // SHARED per-call origin: microseconds since call t=0, same clock on all
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -140,6 +141,13 @@ func (x *Frame) GetData() []byte {
 	return nil
 }
 
+func (x *Frame) GetCallUs() uint64 {
+	if x != nil {
+		return x.CallUs
+	}
+	return 0
+}
+
 type Ack struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Frames        uint64                 `protobuf:"varint,1,opt,name=frames,proto3" json:"frames,omitempty"`
@@ -188,13 +196,14 @@ var File_proto_recorder_proto protoreflect.FileDescriptor
 
 const file_proto_recorder_proto_rawDesc = "" +
 	"\n" +
-	"\x14proto/recorder.proto\x12\brecorder\"s\n" +
+	"\x14proto/recorder.proto\x12\brecorder\"\x8c\x01\n" +
 	"\x05Frame\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\"\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x0e.recorder.KindR\x04kind\x12\x13\n" +
 	"\x05ts_us\x18\x03 \x01(\x04R\x04tsUs\x12\x12\n" +
-	"\x04data\x18\x04 \x01(\fR\x04data\"\x1d\n" +
+	"\x04data\x18\x04 \x01(\fR\x04data\x12\x17\n" +
+	"\acall_us\x18\x05 \x01(\x04R\x06callUs\"\x1d\n" +
 	"\x03Ack\x12\x16\n" +
 	"\x06frames\x18\x01 \x01(\x04R\x06frames*1\n" +
 	"\x04Kind\x12\f\n" +

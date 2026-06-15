@@ -10,6 +10,10 @@ message Frame {
   Kind   kind       = 2;
   uint64 ts_us      = 3;   // monotonic microseconds since this stream's first frame
   bytes  data       = 4;   // VIDEO_AU: one H264 access unit (Annex-B). *_PCM: s16le mono 48kHz
+  uint64 call_us    = 5;   // SHARED per-call origin: microseconds since call t=0, same clock on all
+                           // three streams. The recorder positions PCM by this (sample 0 == call_us 0,
+                           // gaps filled with silence) and derives the video lip-sync offset from the
+                           // first keyframe's call_us. Load-bearing for audio AND video alignment.
 }
 message Ack { uint64 frames = 1; }
 

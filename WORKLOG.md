@@ -102,7 +102,7 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
 |---|-------|---------------|--------|
 | 0 | git baseline (steps 1-3) | repo inits, baseline commit clean | ✅ done |
 | 1 | four principles in CLAUDE.md + this worklog | section added, committed | ✅ done |
-| 2 | contract: add `call_us`, regen pb.go, update CONTRACTS §3 | `go build ./...` clean, diff = new field only | ⏳ |
+| 2 | contract: add `call_us`, regen pb.go, update CONTRACTS §3 | `go build ./...` clean, diff = new field only | ✅ done |
 | 3 | apply Step 4 w/ fix (finalize, httpapi, session, videowriter, main) | `go build` + `go vet` clean | ⏳ |
 | 4 | targeted alignment test | gapped agent burst lands at correct offset | ⏳ |
 
@@ -118,3 +118,15 @@ gap) ⇒ rounding never accumulates ⇒ no drift.
   (think-before-coding / simplicity / surgical / goal-driven), cross-referencing
   the existing anti-overengineering rules instead of duplicating them.
 - Created this `WORKLOG.md`.
+
+### Phase 2 — contract: `call_us`
+- `proto/recorder.proto`: added `uint64 call_us = 5` (shared per-call origin);
+  `ts_us` left verbatim (Fork 1: keep it per-stream).
+- Regenerated with the documented command
+  (`protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. ...`).
+  Diff was minimal and expected: only `recorder.pb.go` (+`CallUs` field, getter,
+  descriptor); `recorder_grpc.pb.go` unchanged (no service change).
+- `CONTRACTS.md` §3: added the field + a "Timestamps (load-bearing)" block
+  pinning `ts_us` per-stream vs `call_us` shared, the silence-fill rule, and the
+  explicit guarantee that the gateway need NOT send continuous audio.
+- Result: `go build ./...` exit 0, `go vet` exit 0.
