@@ -68,6 +68,31 @@ layer selection. Do not add any.
   speculative layer.
 - Test against this question: *would a senior engineer call this overcomplicated?*
 
+## How to work here (four principles — always)
+
+These govern *how* changes are made. The anti-overengineering rules above are
+principle 2 applied to this codebase; these four are the general stance.
+
+1. **Think before coding.** Don't assume — surface confusion and tradeoffs.
+   State assumptions explicitly; if uncertain, ask rather than guess. When a
+   request is ambiguous, present the interpretations instead of silently picking
+   one. Push back when a simpler path exists. Stop and name what's unclear rather
+   than coding past it. (A buried "limitation" that is actually a correctness
+   defect is a think-before-coding failure — call it out, don't carry it.)
+2. **Simplicity first.** The minimum code that solves the problem, nothing
+   speculative. No features, abstractions, flexibility, or error handling for
+   impossible states that weren't asked for. If 200 lines could be 50, rewrite
+   it. Test: *would a senior engineer call this overcomplicated?*
+3. **Surgical changes.** Touch only what the task requires. Don't "improve"
+   adjacent code, refactor what isn't broken, or restyle to taste — match the
+   existing style. Every changed line must trace to the request. Remove only the
+   imports/vars/functions *your* change orphaned; mention pre-existing dead code,
+   don't delete it unasked.
+4. **Goal-driven execution.** Turn each task into a verifiable goal, then loop
+   until it's met. "Fix the bug" → "write a test that reproduces it, then make it
+   pass." State a brief plan as `step → verify: check`. Strong, checkable success
+   criteria over "make it work."
+
 ## Run (dev)
 
 ```bash
