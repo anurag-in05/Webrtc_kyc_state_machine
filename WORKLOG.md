@@ -313,6 +313,8 @@ credentials or network.
 |---|-------|-------|--------|
 | G0 | scaffold (config, session/clock, main) + one-origin gate | `go build`/`vet`/`gofmt` clean, grep gate == 1 | ✅ done |
 | G1 | `recordclient` (gRPC tee + Finalize) | canned frames → real recorder → call-aligned output | ✅ done |
+| G2a | `peer` H.264 depacketizer + SPS/PPS cache | synthetic-RTP tests: drop-until-keyframe, inline param sets, FU-A, teardown flush | ✅ done |
+| G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; SDP/OnTrack validated at G8 e2e | ⏳ |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -368,4 +370,35 @@ credentials or network.
     and treats 202 as success (httptest stub; no ffmpeg).
 - Verified: `go build`/`vet`/`gofmt` clean, full repo `go test ./...` green (recorder
   suite untouched), one-origin grep still == 1.
+
+### Phase G2a — H.264 depacketizer + SPS/PPS cache (peer, part 1)
+- `internal/gateway/peer/h264.go`: `h264Assembler` turns a video track's RTP
+  packets into Annex-B access units for `recordclient.Send(VIDEO_AU)`. Pion's
+  `codecs.H264Packet` does STAP-A/FU-A reassembly → NALs; the assembler groups
+  NALs into one AU per RTP timestamp, drops until the first keyframe, and caches
+  SPS/PPS.
+- **SPS/PPS fix (the carry-over):** every forwarded keyframe AU is guaranteed to
+  carry parameter sets inline. Prepend only the *missing* cached sets (no duplicate
+  SPS in the recorder's avcC); a keyframe with no sets seen anywhere is held back
+  until a complete one arrives. This retires the recorder's "first keyframe lacks
+  SPS/PPS; waiting forever" stall (`videowriter.go:130`) on the gateway side.
+- **AU boundary = RTP timestamp change + `flush()`**, not the marker bit (robust to
+  missing markers; one-frame latency is irrelevant to a recorder tee — the mux
+  already does one-sample lookahead). **Teardown ownership (wired into G2b):** the
+  `OnTrack(video)` goroutine owns the assembler and calls `flush()` when its
+  `ReadRTP` loop exits (track end / peer close), forwarding the final buffered AU;
+  no other code touches the assembler. `flush()` is idempotent.
+- Reused `mp4ff/avc` (already a dep) for NAL parsing, so gateway and recorder agree
+  byte-for-byte on "what is an SPS / a keyframe."
+- New deps: `github.com/pion/rtp v1.10.2` (+ `pion/randutil` indirect). go.sum also
+  carries pion/rtp's test-only chain (testify) for graph completeness — not in our
+  `require` set.
+- Tests (`h264_test.go`), all offline synthetic RTP, no browser: inline SPS+PPS+IDR
+  passes through unchanged; a bare keyframe gets SPS/PPS from cache; pre-keyframe
+  slice dropped, P-frames pass after; FU-A-fragmented IDR reassembled (exact bytes
+  asserted); keyframe with no sets held back then recovers; **final AU flushed at
+  teardown** (proves the buffered tail frame isn't dropped on stream close, and
+  flush is idempotent against a double /close).
+- Verified: `go build`/`vet`/`gofmt` clean, full repo `go test ./...` green,
+  one-origin grep still == 1 (peer adds no `time.Now`).
 
