@@ -321,6 +321,7 @@ credentials or network.
 | G6 | `brainclient` (GET snapshot, POST turn) | round-trips canned CONTRACTS §1 responses field-for-field; failures → error | ✅ done |
 | G7a | live audio wiring: peer `SetMic` gate + 48k→16k downsample in `readAudio` | gate + concurrency (`-race`) tests; full path at G8 | ✅ done |
 | G7b | `turnloop` driver (greeting → loop → degradation) + wiring | integration tests (`-race`): both degradation paths; build/boot smoke | ✅ done |
+| G7c | teardown integration (`call.Close` ordering) + checklist close | mid-utterance unwind test (`-race`); full Close at G8 e2e | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -626,15 +627,34 @@ credentials or network.
 - Verified: build/vet/gofmt clean; full `go test -race ./internal/gateway/...` green;
   one-origin grep == 1; boot smoke (control 404 pre-offer, offer 400).
 
-## G7 checklist (carried forward — do not lose)
-Items deferred to G7 (the turn loop + teardown phase), recorded as we go:
-1. **TTS ctx deadline.** The turn loop MUST pass a deadline `ctx` to `tts.Speak`
-   (G4 has no `http.Client.Timeout` by design — it would truncate streaming); the
-   connect-bound is decided here too.
-2. **Degradation symmetry.** STT timeout, TTS non-200, and intent-classifier
-   failure must ALL fold to `please_repeat` with identical user-visible behavior
-   (hard-invariant 2). One code path, verified.
-3. **Live audio wiring.** `OnTrack(audio)` → `audio.Downsampler` (48k→16k) →
-   `stt.MicBuffer` → `stt.Run`, gated per turn (G3's scope note). `peer.readAudio`
-   currently only tees USER_PCM.
+### Phase G7c — teardown integration + checklist close
+- `call.Close` now tears down in one strict, `sync.Once`-idempotent order: (1)
+  cancel the call ctx (aborts in-flight brain/STT/TTS → the turn loop unwinds); (2)
+  close the control socket; (3) **wait for the turn loop to exit** (`waitLoop` on a
+  `loopDone` channel set by `StartTurnLoop`) — by here its last `AGENT_PCM` tee is
+  done, so no agent producer remains and `rec.Close` can't race a `SendAt`; (4)
+  `peer.Close` (flushes the final video AU); (5) `rec.Close`; (6) `rec.Finalize`.
+- **Disconnect == /close:** both `POST /close` (`closeHandler`) and a terminal peer
+  state (`OnConnectionStateChange` → `onClose` → `Registry.End`) route to the same
+  `call.Close`. Stated + verified by inspection.
+- **Mid-utterance teardown** is clean: cancel aborts `Speak`; the agent audio
+  already streamed was tee'd to the recorder BEFORE the browser send (G5 tee-first),
+  so the recording survives. Test `TestMidUtteranceTeardownUnwinds` (`-race`): a
+  hanging TTS holds the greeting mid-stream, then a cancel makes `Run` unwind
+  promptly (the gateway's request ctx aborts the HTTP call). The full `Call.Close`
+  (real peer/rec) is exercised at G8 e2e.
+- `docs/GATEWAY.md`: rewrote the Teardown section to the 6-step order; fixed the last
+  copy of the contradictory STT-timeout rule (STT-rules section) to route through
+  the brain.
+- Verified: build/vet/gofmt clean; full `go test -race ./...` green; one-origin
+  grep == 1.
+
+## G7 checklist — CLOSED
+1. **TTS ctx deadline** ✅ G7b — `speak` wraps `context.WithTimeout(ctx, 30s)`
+   (bounds connect + streaming; inherits the call ctx).
+2. **Degradation** ✅ G7b — accurate per-side rule: failures the brain can respond
+   to (STT/intent) → please_repeat; failures of reaching the brain or voicing (TTS)
+   → silence-plus-signal. Both paths tested.
+3. **Live audio wiring** ✅ G7a — `OnTrack(audio)` → `Downsampler` → `MicBuffer` →
+   `stt.Run`, gated by the listening window.
 

@@ -20,13 +20,17 @@ import (
 
 // --- stubs ---------------------------------------------------------------
 
-// stubBrain serves an empty-greeting snapshot for GET and turnResp(transcript)
+// stubBrain serves a snapshot (greeting = greetText) for GET and turnResp(transcript)
 // for POST /turn, reporting each /turn transcript on the returned channel.
-func stubBrain(t *testing.T, turnResp func(transcript string) string) (string, <-chan string) {
+func stubBrain(t *testing.T, greetText string, turnResp func(transcript string) string) (string, <-chan string) {
 	t.Helper()
 	tx := make(chan string, 8)
-	const snap = `{"session_id":"s","state":"greeting","language":"english","turn_index":0,` +
-		`"agent_text":"","tts_plan":[],"voice_id":"v","model_id":"m","status":"active",` +
+	plan := "[]"
+	if greetText != "" {
+		plan = `[{"kind":"speech","text":"greeting","slow":false,"speed":1.0}]`
+	}
+	snap := `{"session_id":"s","state":"greeting","language":"english","turn_index":0,` +
+		`"agent_text":"` + greetText + `","tts_plan":` + plan + `,"voice_id":"v","model_id":"m","status":"active",` +
 		`"events":[],"recording_status":"pending","full_call_video_url":null}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/turn") {
@@ -75,10 +79,24 @@ func stubSarvam(t *testing.T) string {
 }
 
 // stubEleven returns `status`; on 200 it writes 2 samples of 24k PCM (→ one
-// upsampled binary frame to the browser).
-func stubEleven(t *testing.T, status int) string {
+// upsampled binary frame to the browser). If hang != nil it instead signals hang
+// (the request is mid-flight) and blocks until the client cancels — to test a
+// mid-utterance teardown.
+func stubEleven(t *testing.T, status int, hang chan struct{}) string {
 	t.Helper()
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hang != nil {
+			select {
+			case hang <- struct{}{}:
+			default:
+			}
+			select { // block until the gateway cancels OR the test releases at cleanup
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			return
@@ -86,6 +104,7 @@ func stubEleven(t *testing.T, status int) string {
 		_, _ = w.Write([]byte{1, 2, 3, 4})
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // LIFO → runs before srv.Close, unblocking the handler
 	return srv.URL
 }
 
@@ -112,22 +131,26 @@ func controlPair(t *testing.T) (*control.Conn, *websocket.Conn) {
 
 type stubs struct {
 	turnResp  func(transcript string) string
-	sttFail   bool // point STT at an unreachable WS (STT failure)
-	ttsStatus int
+	greetText string        // non-empty → the greeting speaks
+	sttFail   bool          // point STT at an unreachable WS (STT failure)
+	ttsStatus int           // ElevenLabs status when not hanging
+	ttsHang   chan struct{} // non-nil → TTS hangs (signals this channel mid-flight)
 }
 
 type harness struct {
-	browser *websocket.Conn
-	brainTx <-chan string
+	browser  *websocket.Conn
+	brainTx  <-chan string
+	cancel   context.CancelFunc // teardown trigger (what Call.Close's cancel does)
+	loopDone <-chan struct{}    // closed when Run returns
 }
 
 func newHarness(t *testing.T, s stubs) *harness {
 	t.Helper()
-	brainURL, brainTx := stubBrain(t, s.turnResp)
+	brainURL, brainTx := stubBrain(t, s.greetText, s.turnResp)
 	conn, browser := controlPair(t)
 
 	ttsc := tts.New("k")
-	ttsc.Base = stubEleven(t, s.ttsStatus)
+	ttsc.Base = stubEleven(t, s.ttsStatus, s.ttsHang)
 	sttc := stt.New("k")
 	if s.sttFail {
 		sttc.WSURL = "ws://127.0.0.1:1" // nothing listening → STT connect fails
@@ -137,17 +160,21 @@ func newHarness(t *testing.T, s stubs) *harness {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go Run(ctx, Deps{
-		SessionID: "s",
-		Conn:      conn,
-		Sink:      control.NewSink(conn, func([]byte, uint64) {}), // no recorder in this test
-		Clock:     func() uint64 { return 0 },
-		SetMic:    func(func([]byte)) {}, // no real audio source here
-		Brain:     brainclient.New(brainURL),
-		TTS:       ttsc,
-		STT:       sttc,
-	})
-	return &harness{browser: browser, brainTx: brainTx}
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		Run(ctx, Deps{
+			SessionID: "s",
+			Conn:      conn,
+			Sink:      control.NewSink(conn, func([]byte, uint64) {}), // no recorder in this test
+			Clock:     func() uint64 { return 0 },
+			SetMic:    func(func([]byte)) {}, // no real audio source here
+			Brain:     brainclient.New(brainURL),
+			TTS:       ttsc,
+			STT:       sttc,
+		})
+	}()
+	return &harness{browser: browser, brainTx: brainTx, cancel: cancel, loopDone: loopDone}
 }
 
 func (h *harness) send(t *testing.T, msg string) {
@@ -324,5 +351,28 @@ func TestTTSFailureSignalsAndContinues(t *testing.T) {
 	case extra := <-h.brainTx:
 		t.Errorf("brain called more than twice (extra %q) — TTS failure double-advanced", extra)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestMidUtteranceTeardownUnwinds: when teardown's ctx cancel lands while the
+// agent is speaking (TTS streaming), the turn loop unwinds promptly and cleanly —
+// the cancel aborts Speak. This is the property Call.Close relies on when it waits
+// for the loop before closing the recorder.
+func TestMidUtteranceTeardownUnwinds(t *testing.T) {
+	hit := make(chan struct{}, 1)
+	h := newHarness(t, stubs{greetText: "Hello.", ttsHang: hit})
+
+	select { // greeting reaches TTS and hangs → we are mid-utterance
+	case <-hit:
+	case <-time.After(3 * time.Second):
+		t.Fatal("greeting never reached TTS")
+	}
+
+	h.cancel() // what Call.Close does first
+
+	select {
+	case <-h.loopDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("turn loop did not unwind on a mid-utterance cancel")
 	}
 }

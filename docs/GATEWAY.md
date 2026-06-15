@@ -107,18 +107,30 @@ the next `start_turn` so the browser finishes playing the tail.
 
 - Forward `START_SPEECH`/`END_SPEECH` to `/control` as `vad` messages.
 - On `END_SPEECH`, stop forwarding mic audio and send Sarvam `{"type":"flush"}`.
-- 15 s hard timeout from connect → treat as failure → the turn has no transcript
-  → the loop sends `error` and continues (brain is not called). A no-transcript
-  turn must not advance state.
+- 15 s hard timeout (wall-clock from connect) → treat as failure → empty transcript.
+  The loop still calls the brain with `""` (which returns please_repeat) — see the
+  degradation rule above; it does NOT short-circuit.
 - Bounded mic buffer with drop-oldest under backpressure (the old code used 400 ×
   20 ms frames ≈ 8 s). Reuse that bound. Drop oldest, never block the reader.
 
-## Teardown (port of `close_peer`, idempotent)
+## Teardown (`call.Close`, idempotent under `sync.Once`)
 
-On `/close` or terminal peer state: cancel goroutines, stop the agent track,
-flush the recorder stream end, call `recordclient.Finalize(session_id)`, close
-the Pion peer. Guard with a `closed` flag so /close and a disconnect race
-safely. The recorder owns its own file flush.
+Both `POST /close` and a terminal peer state (`OnConnectionStateChange` Failed/Closed
+→ `onClose` → `Registry.End`) route to the same `call.Close`, which tears down in
+one strict order, each step a prerequisite of the next:
+
+1. **cancel the call ctx** — aborts in-flight brain/STT/TTS so the turn loop unwinds;
+2. **close the control socket** — Inbox closes, the loop's sends fail gracefully;
+3. **wait for the turn loop to exit** — by here it has cleared `SetMic` and finished
+   its last `AGENT_PCM` tee, so no agent producer remains;
+4. **close the peer** — its OnTrack read goroutines exit and flush the final video
+   access unit (the last video producer);
+5. **`recordclient.Close`** — now safe (no producer) → half-close, recorder flushes;
+6. **`recordclient.Finalize`** — kick the ffmpeg combine.
+
+A mid-utterance teardown is clean: step 1 aborts `Speak`, and the agent audio already
+streamed was tee'd to the recorder BEFORE the browser send (tee-first), so the
+recording survives the drop. The recorder owns its own file flush.
 
 ## Config (env)
 

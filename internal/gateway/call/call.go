@@ -33,6 +33,9 @@ type Call struct {
 	ctx    context.Context // cancelled on teardown → aborts in-flight brain/STT/TTS
 	cancel context.CancelFunc
 
+	mu       sync.Mutex    // guards loopDone
+	loopDone chan struct{} // closed when the turn loop exits; nil until StartTurnLoop
+
 	once sync.Once // teardown happens exactly once (a /close racing a disconnect)
 }
 
@@ -52,37 +55,71 @@ func (c *Call) AttachControl(conn *control.Conn) {
 	})
 }
 
-// Close tears the call down in order: cancel the call ctx (aborts any in-flight
-// brain/STT/TTS in the turn loop), close the control socket, stop the peer (its
-// OnTrack read goroutines exit and flush their final frames to the recorder), then
-// close the recorder stream, then kick the finalize combine. Idempotent.
+// Close tears the call down in one strict, idempotent (sync.Once) order, each step
+// a prerequisite of the next:
+//
+//  1. cancel the call ctx — aborts in-flight brain/STT/TTS so the turn loop unwinds;
+//  2. close the control socket — the turn loop's Inbox closes and its sends fail
+//     gracefully (errors ignored), so it can't block;
+//  3. wait for the turn loop to exit — by here it has cleared SetMic and finished
+//     its last AGENT_PCM tee, so there is no agent producer left;
+//  4. close the peer — its OnTrack read goroutines exit and flush the final video
+//     access unit to the recorder (the last video producer);
+//  5. close the recorder stream — now safe: no producer remains → half-close,
+//     recorder flushes files;
+//  6. finalize — kick the ffmpeg combine.
+//
+// A mid-utterance teardown is clean: step 1 aborts Speak, and the agent audio
+// already streamed was tee'd to the recorder BEFORE the browser send (control.Sink),
+// so the recording survives. The disconnect path (peer terminal state → onClose →
+// Registry.End) and POST /close both route here.
 func (c *Call) Close() {
 	c.once.Do(func() {
 		c.cancel()
 		if c.conn != nil {
 			c.conn.Close()
 		}
-		c.peer.Close() // waits for read goroutines → all media Sends done
-		c.rec.Close()  // half-close the recorder stream (it flushes files)
+		c.waitLoop()   // turn loop (and its AGENT_PCM tee) has stopped
+		c.peer.Close() // stop peer; wait read goroutines → final video AU flushed
+		c.rec.Close()  // no producer left → half-close the recorder stream
 		if err := c.rec.Finalize(); err != nil {
 			log.Printf("call %s: finalize: %v", c.sess.ID, err)
 		}
 	})
 }
 
+// waitLoop blocks until the turn loop goroutine has exited (no-op if it never
+// started — e.g. a disconnect before /control).
+func (c *Call) waitLoop() {
+	c.mu.Lock()
+	done := c.loopDone
+	c.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
 // StartTurnLoop runs the turn loop for a call once its control socket is attached.
-// It builds the concrete Deps from the call's resources + the gateway's clients.
+// It builds the concrete Deps from the call's resources + the gateway's clients,
+// and records a done channel so Close can wait for the loop to unwind.
 func (r *Registry) StartTurnLoop(c *Call) {
-	go turnloop.Run(c.ctx, turnloop.Deps{
-		SessionID: c.sess.ID,
-		Conn:      c.conn,
-		Sink:      c.sink,
-		Clock:     c.sess.CallUS, // the one call-clock origin
-		SetMic:    c.peer.SetMic, // open/close the listening window
-		Brain:     r.brain,
-		TTS:       r.tts,
-		STT:       r.stt,
-	})
+	done := make(chan struct{})
+	c.mu.Lock()
+	c.loopDone = done
+	c.mu.Unlock()
+	go func() {
+		defer close(done)
+		turnloop.Run(c.ctx, turnloop.Deps{
+			SessionID: c.sess.ID,
+			Conn:      c.conn,
+			Sink:      c.sink,
+			Clock:     c.sess.CallUS, // the one call-clock origin
+			SetMic:    c.peer.SetMic, // open/close the listening window
+			Brain:     r.brain,
+			TTS:       r.tts,
+			STT:       r.stt,
+		})
+	}()
 }
 
 // Registry holds the live calls (keyed by session id) and the gateway-wide control
