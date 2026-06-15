@@ -3,23 +3,22 @@
 // See docs/GATEWAY.md and CONTRACTS §2. Not an SFU — one human + one bot, no
 // forwarding.
 //
-// G0 scaffold: config, the per-call clock (internal/gateway/session), and the
-// HTTP surface (CONTRACTS §2). The peer (offer SDP exchange) lands in G2 and
-// the control WebSocket in G5; their handlers are stubs here. /close already
-// works so the session lifecycle (create-on-offer → remove-on-close) is real.
+// As of G2b the offer SDP exchange + media tee are live (peer → recorder). STT,
+// TTS, the turn loop, and the control WebSocket land in G3–G7; /control is a stub.
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
+	"kyc-monorepo/internal/gateway/call"
 	"kyc-monorepo/internal/gateway/config"
-	"kyc-monorepo/internal/gateway/session"
 )
 
 func main() {
 	cfg := config.Load()
-	reg := session.NewRegistry()
+	reg := call.NewRegistry(cfg)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sessions/{id}/offer", offerHandler(reg))
@@ -33,32 +32,55 @@ func main() {
 	}
 }
 
-// offerHandler accepts the browser's send-only SDP offer (CONTRACTS §2). The
-// call clock's origin is set here, the moment the call begins. The Pion peer
-// create/answer + OnTrack wiring lands in G2.
-func offerHandler(reg *session.Registry) http.HandlerFunc {
+type sdp struct {
+	SDP  string `json:"sdp"`
+	Type string `json:"type"`
+}
+
+// offerHandler accepts the browser's send-only SDP offer (CONTRACTS §2) and
+// returns the answer. A first offer starts the call (session clock, recorder tee,
+// peer); a re-offer for a known session is an ICE restart on the existing peer,
+// so the recording is not split.
+func offerHandler(reg *call.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		s := reg.Create(id)
-		log.Printf("offer %s: session created, call clock origin set (call_us=%d)", id, s.CallUS())
-		http.Error(w, "peer wiring lands in G2", http.StatusNotImplemented)
+		var offer sdp
+		if err := json.NewDecoder(r.Body).Decode(&offer); err != nil || offer.SDP == "" {
+			http.Error(w, "bad offer", http.StatusBadRequest)
+			return
+		}
+
+		var answer string
+		var err error
+		if c, ok := reg.Get(id); ok {
+			answer, err = c.Reoffer(offer.SDP) // re-offer → ICE restart
+		} else {
+			answer, err = reg.Start(id, offer.SDP)
+		}
+		if err != nil {
+			log.Printf("offer %s: %v", id, err)
+			http.Error(w, "offer failed", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sdp{SDP: answer, Type: "answer"})
 	}
 }
 
 // controlHandler is the /control WebSocket (CONTRACTS §2): JSON control in,
 // JSON events + binary agent audio out. Upgrade + protocol land in G5.
-func controlHandler(reg *session.Registry) http.HandlerFunc {
+func controlHandler(reg *call.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "control websocket lands in G5", http.StatusNotImplemented)
 	}
 }
 
 // closeHandler tears the call down (CONTRACTS §2). Idempotent: a /close and a
-// peer disconnect may race. Recorder flush + finalize land with teardown in G7.
-func closeHandler(reg *session.Registry) http.HandlerFunc {
+// peer disconnect may race (guarded by Call.Close's sync.Once).
+func closeHandler(reg *call.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		reg.Remove(id)
+		reg.End(r.PathValue("id"))
 		w.WriteHeader(http.StatusOK)
 	}
 }

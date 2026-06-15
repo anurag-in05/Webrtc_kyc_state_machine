@@ -82,7 +82,7 @@ func startRecorder(t *testing.T) (addr, dir string) {
 // gateway→recorder gRPC hop intact.
 func TestSendStreamsCallAlignedToRecorder(t *testing.T) {
 	addr, dir := startRecorder(t)
-	sess := session.NewRegistry().Create("sess")
+	sess := session.New("sess")
 	c, err := New(sess, addr, "")
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestSendStreamsCallAlignedToRecorder(t *testing.T) {
 // offset 0 (which is what arrival-order or a zero clock would produce).
 func TestSendStampsCallUsFromClock(t *testing.T) {
 	addr, dir := startRecorder(t)
-	sess := session.NewRegistry().Create("sess2")
+	sess := session.New("sess2")
 	c, err := New(sess, addr, "")
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestFinalizePostsToRecorder(t *testing.T) {
 	}))
 	defer hsrv.Close()
 
-	sess := session.NewRegistry().Create("sessF")
+	sess := session.New("sessF")
 	c, err := New(sess, addr, hsrv.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestFinalizePostsToRecorder(t *testing.T) {
 // down recorder errored out of New, which propagated up and failed the offer
 // (HTTP 500). The stream is now opened by the sender goroutine instead.
 func TestRecorderDownDegradesNotFails(t *testing.T) {
-	sess := session.NewRegistry().Create("down")
+	sess := session.New("down")
 	// 127.0.0.1:1 has nothing listening — the recorder is "down".
 	c, err := New(sess, "127.0.0.1:1", "")
 	if err != nil {

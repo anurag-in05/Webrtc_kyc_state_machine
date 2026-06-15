@@ -314,7 +314,7 @@ credentials or network.
 | G0 | scaffold (config, session/clock, main) + one-origin gate | `go build`/`vet`/`gofmt` clean, grep gate == 1 | ✅ done |
 | G1 | `recordclient` (gRPC tee + Finalize) | canned frames → real recorder → call-aligned output | ✅ done |
 | G2a | `peer` H.264 depacketizer + SPS/PPS cache | synthetic-RTP tests: drop-until-keyframe, inline param sets, FU-A, teardown flush | ✅ done |
-| G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; SDP/OnTrack validated at G8 e2e | ⏳ |
+| G2b | Pion peer (offer/answer, ICE restart) + OnTrack video/audio → recordclient | wired into offerHandler; build + boot smoke; SDP/OnTrack at G8 e2e | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -405,4 +405,46 @@ credentials or network.
   flush is idempotent against a double /close).
 - Verified: `go build`/`vet`/`gofmt` clean, full repo `go test ./...` green,
   one-origin grep still == 1 (peer adds no `time.Now`).
+
+### Phase G2b — Pion peer + OnTrack tees (peer, part 2)
+- `internal/gateway/peer/peer.go`: `Peer` wraps a Pion `PeerConnection`. `New`
+  builds it from the browser's send-only offer, registers OnTrack, and returns the
+  answer SDP (non-trickle — blocks on `GatheringCompletePromise` so the answer
+  carries all candidates; single POST round-trip per CONTRACTS §2). `Reoffer`
+  re-runs the answer flow on the same PC for ICE restart. No outbound track, no
+  Opus encoder (send-only peer).
+  - `OnTrack(video)` → `h264Assembler` (G2a) → `recordclient.Send(VIDEO_AU)`; the
+    read goroutine owns the assembler and `flush()`es the tail when `ReadRTP`
+    returns (its sole flush site, per G2a's teardown test). No decode.
+  - `OnTrack(audio)` → `pion/opus` decode (defaults to 48 kHz mono — exactly
+    USER_PCM) → `recordclient.Send(USER_PCM)`. Bad packet → drop one frame. The
+    48k→16k STT feed is G3.
+  - `Close` calls `pc.Close()` then `wg.Wait()`s the read goroutines, so their final
+    Sends (incl. the flushed video tail) are enqueued before the recordclient
+    stream closes — the teardown ordering recordclient.Close documents.
+- **Teardown wired both ways.** `OnConnectionStateChange` invokes a once-guarded
+  `onClose` on **Failed/Closed only** (Disconnected can recover — no timers/grace,
+  G7 refines). `onClose` = `func(){ go r.End(id) }` (fresh goroutine so it can't
+  re-enter `Call.Close` on the callback goroutine). So both `POST /close` and an
+  unexpected disconnect tear the call down via the same `Registry.End` (Get→Close→
+  Remove), idempotent through `Call`'s `sync.Once`.
+- **Import-cycle resolution.** Keeping `recordclient` a clean leaf (it imports
+  `session` for the clock) means `session` can't import `peer` (cycle via
+  recordclient). So `session` stayed the pure clock (its G0 `Registry` removed —
+  nothing else used it), and a new `internal/gateway/call/` package became the
+  per-call hub: `Call` owns `{session, peer, recordclient}` + a `sync.Once`
+  teardown; `Registry` maps id→`*Call`. DAG: `session ← recordclient ← peer ← call
+  ← main`, no cycle, **G1's recordclient signature unchanged.**
+- `cmd/gateway/main.go`: `offerHandler` now real — first offer → `call.Registry.Start`
+  (session clock → recorder tee → peer → answer); a re-offer for a known id →
+  `Call.Reoffer` (ICE restart, recording not split). `closeHandler` → `Registry.End`.
+  `/control` still a G5 stub.
+- New deps (direct): `pion/webrtc/v4`, `pion/opus` (+ the Pion WebRTC stack as
+  indirect: dtls/ice/sctp/srtp/stun/turn/sdp/interceptor/…).
+- Verified: `go build`/`vet`/`gofmt` clean; full repo `go test ./...` green
+  (G2a + G1 suites still pass after the session→`call` move); one-origin grep == 1;
+  boot smoke — boots, empty offer→400, garbage SDP→500 (SDP parse), down recorder
+  degrades not fails, `/control`→501, `/close` unknown→200, terminal-state callback
+  fires cleanly. SDP/OnTrack media path validated at G8 e2e (no Pion-loopback test,
+  per the agreed scope).
 

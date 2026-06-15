@@ -1,0 +1,173 @@
+package peer
+
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/pion/opus"
+	"github.com/pion/webrtc/v4"
+
+	"kyc-monorepo/internal/gateway/recordclient"
+	recorderpb "kyc-monorepo/proto"
+)
+
+// Config carries the ICE settings the gateway's peer needs (GATEWAY.md env).
+type Config struct {
+	TURNURL        string
+	TURNUsername   string
+	TURNCredential string
+}
+
+// Peer is the gateway side of the one WebRTC peer per call. The browser is
+// send-only — it publishes mic + camera and subscribes to nothing — so there is
+// NO outbound media track here (the agent voice leaves over the control WS, and
+// pure-Go means no Opus encoder). Pion handles ICE/DTLS; we wire OnTrack to tee
+// the inbound video and user audio to the recorder. Not an SFU: no forwarding.
+type Peer struct {
+	pc  *webrtc.PeerConnection
+	rec *recordclient.Client
+	wg  sync.WaitGroup // OnTrack read goroutines; Close waits on them
+}
+
+// New creates the peer from the browser's send-only offer, wires the OnTrack
+// media tees, and returns the answer SDP (with all ICE candidates — non-trickle,
+// the offer is a single POST round-trip per CONTRACTS §2). ICE/DTLS proceed in
+// the background. onClose is invoked at most once when the connection reaches a
+// terminal state (CONTRACTS §2: "On /close OR terminal peer state"), so an
+// unexpected disconnect tears the call down without waiting for /close.
+func New(offerSDP string, cfg Config, rec *recordclient.Client, onClose func()) (answerSDP string, p *Peer, err error) {
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers(cfg)})
+	if err != nil {
+		return "", nil, fmt.Errorf("peer: new connection: %w", err)
+	}
+	p = &Peer{pc: pc, rec: rec}
+	pc.OnTrack(p.onTrack)
+	var closeOnce sync.Once
+	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		log.Printf("peer: connection state %s", s)
+		// Failed/Closed only — Disconnected can still recover, so we don't tear
+		// down on it. Minimal: no timers/grace period (G7's teardown phase refines).
+		if onClose != nil && (s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed) {
+			closeOnce.Do(onClose)
+		}
+	})
+	answerSDP, err = p.answer(offerSDP)
+	if err != nil {
+		pc.Close()
+		return "", nil, err
+	}
+	return answerSDP, p, nil
+}
+
+// Reoffer applies a re-offer (network change / ICE restart) to the existing peer
+// without tearing down the recording (CONTRACTS §2): same answer flow on the
+// same PeerConnection.
+func (p *Peer) Reoffer(offerSDP string) (string, error) {
+	return p.answer(offerSDP)
+}
+
+// answer sets the remote offer, creates+sets the local answer, and blocks until
+// ICE gathering completes so the returned SDP carries every candidate.
+func (p *Peer) answer(offerSDP string) (string, error) {
+	if err := p.pc.SetRemoteDescription(webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer, SDP: offerSDP,
+	}); err != nil {
+		return "", fmt.Errorf("peer: set remote: %w", err)
+	}
+	answer, err := p.pc.CreateAnswer(nil)
+	if err != nil {
+		return "", fmt.Errorf("peer: create answer: %w", err)
+	}
+	gatherComplete := webrtc.GatheringCompletePromise(p.pc)
+	if err := p.pc.SetLocalDescription(answer); err != nil {
+		return "", fmt.Errorf("peer: set local: %w", err)
+	}
+	<-gatherComplete
+	return p.pc.LocalDescription().SDP, nil
+}
+
+func (p *Peer) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	p.wg.Add(1)
+	switch track.Kind() {
+	case webrtc.RTPCodecTypeVideo:
+		go p.readVideo(track)
+	case webrtc.RTPCodecTypeAudio:
+		go p.readAudio(track)
+	default:
+		p.wg.Done()
+	}
+}
+
+// readVideo turns the video track's RTP into Annex-B access units and tees them
+// as VIDEO_AU. No decode. On loop exit (track end / peer close) it flushes the
+// final buffered AU — this goroutine owns the assembler and is its only flush
+// site (see h264.go teardown note).
+func (p *Peer) readVideo(track *webrtc.TrackRemote) {
+	defer p.wg.Done()
+	var asm h264Assembler
+	for {
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			break // track ended / peer closed
+		}
+		if au := asm.push(pkt); au != nil {
+			p.rec.Send(recorderpb.Kind_VIDEO_AU, au)
+		}
+	}
+	if au := asm.flush(); au != nil {
+		p.rec.Send(recorderpb.Kind_VIDEO_AU, au)
+	}
+}
+
+// readAudio decodes the inbound Opus mic to 48 kHz mono s16le (pure-Go, no
+// encoder) and tees it as USER_PCM. The 48k→16k STT feed lands in G3.
+func (p *Peer) readAudio(track *webrtc.TrackRemote) {
+	defer p.wg.Done()
+	dec := opus.NewDecoder() // 48 kHz mono output
+	out := make([]int16, maxOpusFrameSamples)
+	for {
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			break
+		}
+		n, err := dec.DecodeToInt16(pkt.Payload, out)
+		if err != nil {
+			continue // bad/again packet → drop one frame (degrade, never break)
+		}
+		p.rec.Send(recorderpb.Kind_USER_PCM, int16ToS16LE(out[:n]))
+	}
+}
+
+// Close shuts the peer and waits for the OnTrack read goroutines to exit, so
+// their final Sends (including the flushed video tail) are enqueued before the
+// caller closes the recordclient stream. Pion's Close is idempotent.
+func (p *Peer) Close() {
+	p.pc.Close() // unblocks ReadRTP → read loops break and flush
+	p.wg.Wait()  // their final Sends are now done
+}
+
+// maxOpusFrameSamples bounds one decoded Opus frame: 120 ms (Opus max) at 48 kHz
+// mono = 5760 samples.
+const maxOpusFrameSamples = 48000 / 1000 * 120
+
+func int16ToS16LE(s []int16) []byte {
+	b := make([]byte, len(s)*2)
+	for i, v := range s {
+		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
+	}
+	return b
+}
+
+func iceServers(cfg Config) []webrtc.ICEServer {
+	servers := []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	if cfg.TURNURL != "" {
+		servers = append(servers, webrtc.ICEServer{
+			URLs:       []string{cfg.TURNURL},
+			Username:   cfg.TURNUsername,
+			Credential: cfg.TURNCredential,
+		})
+	}
+	return servers
+}
