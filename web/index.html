@@ -323,8 +323,8 @@
       <span id="status-pill" class="pill"></span>
     </div>
     <video id="cam-preview" class="cam-preview hidden" autoplay muted playsinline></video>
-    <!-- Phase 2: agent voice arrives on the inbound WebRTC track and plays here. -->
-    <audio id="agent-audio" autoplay class="hidden"></audio>
+    <!-- Agent voice arrives as binary frames on the /control WebSocket and plays
+         via Web Audio (see playAgentChunk); no media element needed. -->
     <div class="agent" id="agent-text">…</div>
     <div class="user" id="user-text"></div>
     <div id="recording-status" class="rec-status hidden"></div>
@@ -359,7 +359,9 @@
  * ------------------------------------------------------------------ */
 
 const TURN_SR_OUT = 16000;   // mic uplink sample rate (must match server expectation)
-const AGENT_SR_IN = 24000;   // agent downlink sample rate (server tts.STREAM_SAMPLE_RATE)
+const AGENT_SR_IN = 24000;   // legacy "ws" transport downlink rate (playPcmStream only)
+const AGENT_SR_WS = 48000;   // unified path: gateway streams agent voice as s16le mono 48k binary WS frames
+const BRAIN_BASE  = "http://localhost:8000";  // control plane (cross-origin; brain allows *). This page is served same-origin by the gateway.
 
 // ----- DOM ---------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -694,10 +696,15 @@ async function stopVideoCaptureWebRTC() {
 
 let mediaPc = null;
 let localStream = null;
-let controlChannel = null;
+let controlWs = null;         // /control WebSocket: text=JSON control, binary=agent audio (s16le mono 48k)
 let pendingTurn = null;       // {resolve, reject} for the in-flight turn
 let pendingAgentDone = null;  // {resolve} waiting for the agent to finish speaking
 let agentDoneSignals = 0;     // buffered agent_done count (signal may beat the waiter)
+// Agent voice arrives as binary WS frames (replacing the old inbound track) and is
+// scheduled on a dedicated 48k context.
+let agentCtx = null;          // AudioContext @ 48k for agent playback
+let agentNextTime = 0;        // scheduling cursor (seconds, in agentCtx time)
+let agentLeftover = new Uint8Array(0);  // odd-byte carry across binary frames
 
 async function getUnifiedStream(start) {
   const audioOnly = {
@@ -738,7 +745,7 @@ async function getUnifiedStream(start) {
 }
 
 async function startUnifiedMedia(start) {
-  window.__videoOfferUrl = start.video_offer_url;  // stashed for ICE restart
+  window.__videoOfferUrl = start.gateway_offer_url;  // stashed for ICE restart
   // Join-path instrumentation (client side): mirrors the server's JOIN_* logs
   // so the click→offer gap can be split into camera / offer / ICE-gathering.
   const joinT0 = performance.now();
@@ -756,16 +763,9 @@ async function startUnifiedMedia(start) {
 
   mediaPc = new RTCPeerConnection({ iceServers: start.ice_servers || [] });
 
-  // The server sends the agent's voice back on this peer's inbound audio track.
-  // Route it to the hidden <audio> element. The form-submit gesture earlier in
-  // the flow satisfies autoplay; play() is best-effort regardless.
-  mediaPc.ontrack = (e) => {
-    if (e.track.kind !== "audio") return;
-    const audioEl = $("agent-audio");
-    audioEl.srcObject = e.streams[0] || new MediaStream([e.track]);
-    audioEl.play().catch((err) => log(`agent audio autoplay blocked: ${err.message}`));
-    log("agent audio track attached");
-  };
+  // The gateway is a send-only peer — there is no inbound track. The agent's voice
+  // arrives as binary frames on the /control WebSocket (opened after the offer
+  // exchange) and is scheduled via Web Audio in playAgentChunk().
 
   mediaPc.onconnectionstatechange = async () => {
     log(`webrtc state: ${mediaPc.connectionState}`);
@@ -779,12 +779,6 @@ async function startUnifiedMedia(start) {
   };
   mediaPc.oniceconnectionstatechange = () => log(`webrtc ice: ${mediaPc.iceConnectionState}`);
 
-  // Open the control channel BEFORE creating the offer so it is negotiated in
-  // the SDP. The server starts its turn loop when this channel opens.
-  controlChannel = mediaPc.createDataChannel("control");
-  controlChannel.onopen = () => log("control channel open");
-  controlChannel.onmessage = handleControlMessage;
-
   for (const track of localStream.getTracks()) mediaPc.addTrack(track, localStream);
 
   t0 = performance.now();
@@ -797,7 +791,7 @@ async function startUnifiedMedia(start) {
   await constrainBitrate(mediaPc, 500000);
 
   t0 = performance.now();
-  const r = await fetch(start.video_offer_url, {
+  const r = await fetch(start.gateway_offer_url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sdp: mediaPc.localDescription.sdp, type: "offer" }),
@@ -805,17 +799,71 @@ async function startUnifiedMedia(start) {
   if (!r.ok) throw new Error(`offer rejected: ${r.status}`);
   await mediaPc.setRemoteDescription(await r.json());
   stepLog("offerExchange", t0);
+
+  // Control is a separate WebSocket on the gateway (same origin as this page).
+  // Text frames = JSON control; binary frames = agent voice (s16le mono 48k).
+  // Opened AFTER the offer (the gateway 404s /control before the session exists);
+  // the gateway starts its turn loop — and streams the greeting — once it opens.
+  await ensureAgentAudio();
+  const controlUrl = start.gateway_offer_url
+    .replace(/^http/, "ws")
+    .replace(/\/offer$/, "/control");
+  controlWs = new WebSocket(controlUrl);
+  controlWs.binaryType = "arraybuffer";
+  controlWs.onmessage = (e) => {
+    if (typeof e.data === "string") handleControlMessage(e); // JSON control
+    else playAgentChunk(e.data);                             // binary agent audio
+  };
+  controlWs.onerror = () => log("control ws error");
+  await waitWsOpen(controlWs, 8000);
   stepLog("JOIN_COMPLETE(client)", joinT0);
   log("unified webrtc media started");
-  await waitChannelOpen(controlChannel, 8000);
 }
 
-function waitChannelOpen(ch, timeoutMs) {
-  if (ch && ch.readyState === "open") return Promise.resolve();
+function waitWsOpen(ws, timeoutMs) {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("control channel open timeout")), timeoutMs);
-    ch.addEventListener("open", () => { clearTimeout(t); resolve(); });
+    const t = setTimeout(() => reject(new Error("control ws open timeout")), timeoutMs);
+    ws.addEventListener("open",  () => { clearTimeout(t); resolve(); });
+    ws.addEventListener("error", () => { clearTimeout(t); reject(new Error("control ws error")); });
   });
+}
+
+// Agent voice playback: binary WS frames are raw s16le mono 48k PCM. Schedule
+// them back-to-back on a dedicated AudioContext (mirrors playPcmStream's
+// scheduling, but fed by the socket instead of an HTTP body).
+async function ensureAgentAudio() {
+  if (!agentCtx) {
+    agentCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: AGENT_SR_WS });
+    agentNextTime = 0;
+  }
+  if (agentCtx.state === "suspended") await agentCtx.resume();
+}
+
+function playAgentChunk(arrayBuf) {
+  if (!agentCtx) return;
+  const incoming = new Uint8Array(arrayBuf);
+  const merged = new Uint8Array(agentLeftover.length + incoming.length);
+  merged.set(agentLeftover); merged.set(incoming, agentLeftover.length);
+  const evenLen = merged.length - (merged.length % 2);
+  agentLeftover = merged.slice(evenLen);
+  if (evenLen === 0) return;
+  const view = new DataView(merged.buffer, merged.byteOffset, evenLen);
+  const n = evenLen / 2;
+  const samples = new Float32Array(n);
+  for (let i = 0; i < n; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
+  const buf = agentCtx.createBuffer(1, n, AGENT_SR_WS);
+  buf.copyToChannel(samples, 0);
+  const src = agentCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(agentCtx.destination);
+  // If the cursor fell behind real time (start of an utterance, or a gap between
+  // chunks) re-anchor with a small lead-in to absorb jitter; otherwise append.
+  if (agentNextTime < agentCtx.currentTime + 0.02) {
+    agentNextTime = agentCtx.currentTime + PLAYBACK_LEAD_S;
+  }
+  src.start(agentNextTime);
+  agentNextTime += buf.duration;
 }
 
 function handleControlMessage(event) {
@@ -846,16 +894,32 @@ function runTurnWebRTC() {
   return new Promise((resolve, reject) => {
     pendingTurn = { resolve, reject };
     setIndicator("listen", "Listening — speak when ready");
-    try { controlChannel.send(JSON.stringify({ type: "start_turn" })); }
+    try { controlWs.send(JSON.stringify({ type: "start_turn" })); }
     catch (e) { pendingTurn = null; reject(e); }
   });
 }
 
-// Resolve once the agent has finished speaking (server {type:agent_done}).
-// Consumes a buffered signal if one already arrived (e.g. for the greeting).
+// Resolve once the agent has finished speaking. {type:agent_done} fires when the
+// gateway finishes STREAMING the TTS, but playAgentChunk schedules that audio into
+// the future (agentNextTime) — so the signal arriving does NOT mean playback is
+// over. Wait for the signal, then drain the scheduled playback, so the caller
+// never opens the mic while the agent is still audible (which fed the agent's own
+// voice back into STT and ran the turn loop away). Consumes a buffered signal if
+// one already arrived (e.g. for the greeting).
 function waitForAgentDone() {
-  if (agentDoneSignals > 0) { agentDoneSignals--; return Promise.resolve(); }
-  return new Promise((resolve) => { pendingAgentDone = { resolve }; });
+  const signal = agentDoneSignals > 0
+    ? (agentDoneSignals--, Promise.resolve())
+    : new Promise((resolve) => { pendingAgentDone = { resolve }; });
+  return signal.then(waitForAgentPlaybackDrained);
+}
+
+// Resolve once the locally-scheduled agent audio (up to agentNextTime, in agentCtx
+// time) has actually played out. +50 ms guard mirrors playPcmStream's drain.
+function waitForAgentPlaybackDrained() {
+  if (!agentCtx) return;
+  const remaining = agentNextTime - agentCtx.currentTime;
+  if (remaining <= 0) return;
+  return new Promise((r) => setTimeout(r, remaining * 1000 + 50));
 }
 
 async function tryIceRestartUnified() {
@@ -880,18 +944,18 @@ async function tryIceRestartUnified() {
 
 async function stopUnifiedMedia() {
   try {
-    if (controlChannel && controlChannel.readyState === "open") {
-      controlChannel.send(JSON.stringify({ type: "end" }));
+    if (controlWs && controlWs.readyState === WebSocket.OPEN) {
+      controlWs.send(JSON.stringify({ type: "end" }));
     }
   } catch (_) {}
+  try { if (controlWs) controlWs.close(); } catch (_) {}
   try { if (mediaPc) mediaPc.close(); } catch (_) {}
   try { if (localStream) localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
   const preview = $("cam-preview");
   if (preview) { preview.srcObject = null; preview.classList.add("hidden"); }
-  const audioEl = $("agent-audio");
-  if (audioEl) audioEl.srcObject = null;
-  mediaPc = null; localStream = null; controlChannel = null;
+  mediaPc = null; localStream = null; controlWs = null;
   pendingTurn = null; pendingAgentDone = null; agentDoneSignals = 0;
+  agentLeftover = new Uint8Array(0);
 }
 
 // Poll GET /sessions/{sid} until recording_status leaves "pending".
@@ -903,7 +967,7 @@ async function pollRecordingStatus() {
   for (let i = 0; i < 40; i++) {  // ~2 min cap at 3s/poll
     let info;
     try {
-      const r = await fetch(`/api/v1/sessions/${sessionId}`);
+      const r = await fetch(`${BRAIN_BASE}/api/v1/sessions/${sessionId}`);
       if (!r.ok) break;
       info = await r.json();
     } catch (_) { break; }
@@ -935,7 +999,7 @@ async function startSession(formValues) {
   for (const k of ["alternative_mobile", "nominee_name", "room_name", "video_transport"]) {
     if (!payload[k]) delete payload[k];
   }
-  const r = await fetch("/api/v1/sessions/start", {
+  const r = await fetch(BRAIN_BASE + "/api/v1/sessions/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -953,7 +1017,7 @@ async function endSession() {
     await stopVideoCaptureWebRTC();
   }
   try {
-    await fetch(`/api/v1/sessions/${sessionId}/end`, { method: "POST" });
+    await fetch(`${BRAIN_BASE}/api/v1/sessions/${sessionId}/end`, { method: "POST" });
   } catch (_) {}
   // Mux runs server-side in the background; poll for the final status once.
   if (!recordingPollStarted) {
@@ -1024,10 +1088,13 @@ async function runSession(formValues) {
   agentText.textContent = start.agent_text;
   log(`session_id=${sessionId.slice(0, 8)}…  transport=${start.video_transport}`);
 
-  if (start.video_transport === "webrtc") {
-    await runSessionWebRTC(start);
-  } else {
+  // The brain is webrtc-only and does not return video_transport (CONTRACTS §1),
+  // so default to the unified WebRTC path; the legacy "ws" path runs only if a
+  // server explicitly selects it.
+  if (start.video_transport === "ws") {
     await runSessionLegacy(start);
+  } else {
+    await runSessionWebRTC(start);
   }
 }
 

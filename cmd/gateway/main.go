@@ -25,6 +25,11 @@ func main() {
 	mux.HandleFunc("POST /sessions/{id}/offer", offerHandler(reg))
 	mux.HandleFunc("GET /sessions/{id}/control", controlHandler(reg))
 	mux.HandleFunc("POST /sessions/{id}/close", closeHandler(reg))
+	// Serve the browser client same-origin with /offer + /control so the peer
+	// endpoints need no CORS (the page only goes cross-origin to the brain, which
+	// allows it). The more-specific GET /sessions/{id}/control still wins. Served
+	// from web/ relative to the run dir (repo root: `go run ./cmd/gateway`).
+	mux.Handle("GET /", http.FileServer(http.Dir("web")))
 
 	log.Printf("gateway listening on :%s (brain=%s recorder=%s)",
 		cfg.Port, cfg.BrainURL, cfg.RecorderGRPCAddr)

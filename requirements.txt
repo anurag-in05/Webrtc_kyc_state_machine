@@ -1,0 +1,11 @@
+# Intent service install list for this monorepo layout. The service's own
+# intent/requirements.txt uses `-r ../../requirements-base.txt`, which assumes the
+# original services/intent/ tree and points outside this repo, so this flat list
+# stands in: `intent/.venv/bin/pip install -r requirements.txt`.
+fastapi
+uvicorn
+sentence-transformers
+scikit-learn
+numpy
+joblib
+loguru

@@ -8,3 +8,6 @@ intent/models/sentence_encoder/
 # generated/test artifacts
 out.mp4
 .DS_Store
+
+# local-dev intent shim (intent service code expects services/intent/)
+/services/

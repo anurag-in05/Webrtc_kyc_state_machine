@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/opus"
 	"github.com/pion/webrtc/v4"
 
@@ -66,7 +67,11 @@ func (p *Peer) feedMic(pcm16 []byte) {
 // terminal state (CONTRACTS §2: "On /close OR terminal peer state"), so an
 // unexpected disconnect tears the call down without waiting for /close.
 func New(offerSDP string, cfg Config, rec *recordclient.Client, onClose func()) (answerSDP string, p *Peer, err error) {
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers(cfg)})
+	api, err := newAPI()
+	if err != nil {
+		return "", nil, fmt.Errorf("peer: media engine: %w", err)
+	}
+	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers(cfg)})
 	if err != nil {
 		return "", nil, fmt.Errorf("peer: new connection: %w", err)
 	}
@@ -117,6 +122,7 @@ func (p *Peer) answer(offerSDP string) (string, error) {
 }
 
 func (p *Peer) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	log.Printf("peer: inbound track kind=%s codec=%s", track.Kind(), track.Codec().MimeType)
 	p.wg.Add(1)
 	switch track.Kind() {
 	case webrtc.RTPCodecTypeVideo:
@@ -191,6 +197,35 @@ func int16ToS16LE(s []int16) []byte {
 		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
 	}
 	return b
+}
+
+// newAPI builds a Pion API whose MediaEngine advertises ONLY Opus (mic) and H264
+// (camera). Restricting video to H264 is load-bearing: readVideo depacketizes with
+// the H264 assembler (h264.go) and the recorder writes H264 into fragmented MP4.
+// Pion's default codecs ALSO offer VP8/VP9, which Chrome picks first by default —
+// delivering a track the H264 assembler can't parse, so no access units are ever
+// written and the recording is silently audio-only. packetization-mode=1 matches
+// the FU-A/STAP-A reassembly in h264.go; profile 42e01f is Constrained Baseline,
+// which every browser can encode. Default interceptors keep NACK/RTCP behaviour.
+func newAPI() (*webrtc.API, error) {
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
+		PayloadType:        102,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		return nil, err
+	}
+	i := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, i); err != nil {
+		return nil, err
+	}
+	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(i)), nil
 }
 
 func iceServers(cfg Config) []webrtc.ICEServer {
