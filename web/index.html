@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bajaj Capital — Voice Consent</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --text: #e6e8eb;
+    --muted: #8b95a3;
+    --accent: #5b8cff;
+    --ok: #2ecc71;
+    --err: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid #262a33;
+    border-radius: 16px;
+    padding: 32px;
+    width: 100%;
+    max-width: 820px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+  form { display: flex; flex-direction: column; gap: 12px; }
+  fieldset {
+    border: 1px solid #262a33;
+    border-radius: 10px;
+    padding: 14px 16px 16px;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  legend {
+    padding: 0 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+  }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input, select, button {
+    background: #12141a;
+    border: 1px solid #2a2f3a;
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  select { appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  button {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 12px 16px;
+    margin-top: 8px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--muted); border-color: #2a2f3a; }
+  .status {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: #12141a;
+    border: 1px solid #2a2f3a;
+    font-size: 13px;
+  }
+  .indicator {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    margin-right: 8px;
+  }
+  .indicator.listen { background: var(--accent); animation: pulse 1.2s infinite; }
+  .indicator.speak  { background: var(--ok);     animation: pulse 1.2s infinite; }
+  .indicator.error  { background: var(--err); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  .agent {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: #181b22;
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 48px;
+  }
+  .user {
+    margin-top: 8px;
+    padding: 8px 14px;
+    color: var(--muted);
+    font-size: 13px;
+    border-left: 3px solid #2a2f3a;
+  }
+  .log {
+    margin-top: 20px;
+    background: #0a0c10;
+    border: 1px solid #1a1d24;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .row { display: flex; gap: 12px; }
+  .row > * { flex: 1; }
+  .hidden { display: none; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    background: #262a33;
+    color: var(--muted);
+    margin-left: 8px;
+  }
+  .pill.active    { background: #1e3a5f; color: #9dc8ff; }
+  .pill.completed { background: #1e3f2a; color: #8fe0a5; }
+  .pill.failed    { background: #4a1d22; color: #ff9a9a; }
+  .cam-preview {
+    margin-top: 16px;
+    width: 320px;
+    max-width: 100%;
+    height: 180px;
+    background: #000;
+    border: 1px solid #2a2f3a;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+  .rec-status {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: #12141a;
+    border: 1px solid #2a2f3a;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .rec-status a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <h1>Bajaj Capital — Voice Consent Demo</h1>
+  <div class="subtitle">Speak with Kavya. The session walks through identity verification.</div>
+
+  <form id="start-form">
+
+    <fieldset>
+      <legend>Session</legend>
+      <div class="row">
+        <label>Language
+          <select id="language" required>
+            <option value="english" selected>English</option>
+            <option value="hindi">Hindi</option>
+            <option value="bengali">Bengali</option>
+            <option value="gujarati">Gujarati</option>
+            <option value="kannada">Kannada</option>
+            <option value="tamil">Tamil</option>
+            <option value="telugu">Telugu</option>
+          </select>
+        </label>
+        <label>Company ID
+          <input type="number" id="company-id" value="1" min="1" required />
+        </label>
+        <label>Workspace ID
+          <input type="number" id="workspace-id" value="1" min="1" required />
+        </label>
+      </div>
+      <label>Room name <span style="opacity:0.6">(optional)</span>
+        <input type="text" id="room-name" placeholder="kyc-session-abc" />
+      </label>
+      <label>Video transport
+        <input type="text" id="video-transport" value="webrtc" />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Customer</legend>
+      <div class="row">
+        <label>Customer name
+          <input type="text" id="customer-name" value="Rahul Sharma" required />
+        </label>
+        <label>Gender
+          <select id="gender">
+            <option value="">—</option>
+            <option value="male" selected>Male</option>
+            <option value="female">Female</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Primary mobile
+          <input type="text" id="primary-mobile" value="9876543210" required />
+        </label>
+        <label>Alternative mobile <span style="opacity:0.6">(optional)</span>
+          <input type="text" id="alternative-mobile" placeholder="9123456780" />
+        </label>
+      </div>
+      <label>Email
+        <input type="email" id="email" value="rahul@gmail.com" required />
+      </label>
+      <label>Address
+        <input type="text" id="address" value="123 Main Street, Mumbai 400001" required />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Insured &amp; nominee</legend>
+      <div class="row">
+        <label>Insured name
+          <input type="text" id="insured-name" value="Rahul Sharma" required />
+        </label>
+        <label>Relation to insured
+          <input type="text" id="relation-to-insured" value="myself" required />
+        </label>
+      </div>
+      <div class="row">
+        <label>Insured date of birth
+          <input type="text" id="dob-life-assured" value="January 1st, 1990" required />
+        </label>
+        <label>Nominee name <span style="opacity:0.6">(optional)</span>
+          <input type="text" id="nominee-name" placeholder="Priya Sharma" />
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Policy</legend>
+      <div class="row">
+        <label>Company
+          <input type="text" id="company" value="Bajaj Capital" required />
+        </label>
+        <label>Plan name
+          <input type="text" id="plan-name" value="Term Plus" required />
+        </label>
+      </div>
+      <div class="row">
+        <label>Application date
+          <input type="text" id="application-date" value="July 3rd, 2024" required />
+        </label>
+        <label>Policy term (years)
+          <input type="number" id="policy-term" value="20" min="1" required />
+        </label>
+      </div>
+      <div class="row">
+        <label>Sum insured
+          <input type="text" id="sum-insured" value="1000000" required />
+        </label>
+        <label>Currency
+          <input type="text" id="currency" value="INR" required />
+        </label>
+        <label>Free look period (days)
+          <input type="number" id="free-look-period" value="15" min="0" required />
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Premium</legend>
+      <div class="row">
+        <label>Premium amount
+          <input type="text" id="premium-amount" value="5000" required />
+        </label>
+        <label>Premium frequency
+          <select id="premium-frequency" required>
+            <option value="monthly">Monthly</option>
+            <option value="quarterly">Quarterly</option>
+            <option value="half_yearly">Half-yearly</option>
+            <option value="yearly" selected>Yearly</option>
+            <option value="single">Single / lumpsum</option>
+          </select>
+        </label>
+        <label>Paying term (years)
+          <input type="number" id="premium-paying-term" value="20" min="1" required />
+        </label>
+      </div>
+      <label>Premium payment mode
+        <select id="premium-payment-mode" required>
+          <option value="credit card" selected>Credit card</option>
+          <option value="debit card">Debit card</option>
+          <option value="net banking">Net banking</option>
+          <option value="upi">UPI</option>
+          <option value="cheque">Cheque</option>
+          <option value="cash">Cash</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <button type="submit" id="start-btn">Start session</button>
+  </form>
+
+  <div id="session-panel" class="hidden">
+    <div class="status">
+      <span id="indicator" class="indicator"></span>
+      <span id="status-label">Initialising…</span>
+      <span id="status-pill" class="pill"></span>
+    </div>
+    <video id="cam-preview" class="cam-preview hidden" autoplay muted playsinline></video>
+    <!-- Phase 2: agent voice arrives on the inbound WebRTC track and plays here. -->
+    <audio id="agent-audio" autoplay class="hidden"></audio>
+    <div class="agent" id="agent-text">…</div>
+    <div class="user" id="user-text"></div>
+    <div id="recording-status" class="rec-status hidden"></div>
+    <div class="log" id="log"></div>
+    <button class="ghost" id="end-btn">End session</button>
+  </div>
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+ * Bajaj Capital — voice consent web client
+ *
+ * Two transports, chosen by the /start response:
+ *
+ *  webrtc (default, Phase 2 unified path):
+ *    - ONE getUserMedia(mic + camera) on ONE RTCPeerConnection.
+ *    - Mic + camera are sent to the server, which records them into one
+ *      synced file and forks the mic to STT. No per-turn connection churn.
+ *    - The agent's voice comes back on the SAME peer's inbound audio track and
+ *      plays through a hidden <audio> element — no HTTP GET, no manual
+ *      AudioContext scheduling.
+ *    - Turns are driven over a 'control' data channel: the server speaks the
+ *      greeting then sends {type:agent_done}; the client sends {type:start_turn}
+ *      and receives {type:vad}/{type:final}, then {type:agent_done} once the
+ *      agent has finished speaking and it is safe to start the next turn.
+ *
+ *  ws (legacy fallback, only if the server enables it):
+ *    - per-turn /turn-stream WS for mic + /stream/{turn} for agent audio.
+ *      Audio-only (webcam-over-WS was removed).
+ *
+ * No deps. Pure browser APIs (RTCPeerConnection + AudioContext + fetch).
+ * ------------------------------------------------------------------ */
+
+const TURN_SR_OUT = 16000;   // mic uplink sample rate (must match server expectation)
+const AGENT_SR_IN = 24000;   // agent downlink sample rate (server tts.STREAM_SAMPLE_RATE)
+
+// ----- DOM ---------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const indicator   = $("indicator");
+const statusLabel = $("status-label");
+const statusPill  = $("status-pill");
+const agentText   = $("agent-text");
+const userText    = $("user-text");
+const logEl       = $("log");
+const startForm   = $("start-form");
+const startBtn    = $("start-btn");
+const endBtn      = $("end-btn");
+const sessionPanel = $("session-panel");
+
+function log(msg) {
+  const line = document.createElement("div");
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setIndicator(kind, label) {
+  indicator.className = "indicator " + kind;
+  statusLabel.textContent = label;
+}
+
+function setStatusPill(status) {
+  statusPill.className = "pill " + status;
+  statusPill.textContent = status;
+}
+
+// ----- Audio playback (server -> speaker) ---------------------------
+
+let outCtx = null;  // AudioContext used for playback; one per page
+
+// Lead-in absorbs network jitter on the first chunk; bumped from 50 ms
+// because eleven_multilingual_v2 has noticeably more inter-chunk variance
+// than flash, which made the old value too tight on slow connections (ngrok,
+// mobile, etc.).
+const PLAYBACK_LEAD_S = 0.20;
+
+async function playPcmStream(url) {
+  if (!outCtx) outCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: AGENT_SR_IN });
+  if (outCtx.state === "suspended") await outCtx.resume();
+
+  setIndicator("speak", "Agent speaking…");
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`agent audio ${resp.status}`);
+  const reader = resp.body.getReader();
+  let nextTime = outCtx.currentTime + PLAYBACK_LEAD_S;
+  let leftover = new Uint8Array(0);
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    // merge leftover (odd byte) with new chunk
+    const merged = new Uint8Array(leftover.length + value.length);
+    merged.set(leftover); merged.set(value, leftover.length);
+    const evenLen = merged.length - (merged.length % 2);
+    leftover = merged.slice(evenLen);
+    if (evenLen === 0) continue;
+
+    // int16 little-endian -> float32
+    const view = new DataView(merged.buffer, merged.byteOffset, evenLen);
+    const samples = new Float32Array(evenLen / 2);
+    for (let i = 0; i < samples.length; i++) {
+      samples[i] = view.getInt16(i * 2, true) / 32768;
+    }
+
+    const buf = outCtx.createBuffer(1, samples.length, AGENT_SR_IN);
+    buf.copyToChannel(samples, 0);
+    const src = outCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(outCtx.destination);
+
+    // If a previous chunk drained while we were waiting for this one,
+    // the cumulative `nextTime` falls behind the AudioContext clock —
+    // scheduling at a past time would play this chunk immediately and
+    // overlap whatever is already sounding. Snap forward instead.
+    if (nextTime < outCtx.currentTime) {
+      nextTime = outCtx.currentTime + 0.02;
+    }
+    src.start(nextTime);
+    nextTime += buf.duration;
+  }
+  // Wait for the scheduled audio to finish before resolving.
+  const remaining = Math.max(0, nextTime - outCtx.currentTime);
+  await new Promise((r) => setTimeout(r, remaining * 1000 + 50));
+}
+
+// ----- Mic capture (mic -> server) ---------------------------------
+//
+// AudioWorklet that:
+//   - reads the AudioContext's default sample rate (usually 48000)
+//   - resamples to TURN_SR_OUT (16000) via simple decimation/linear interp
+//   - quantises float32 -> int16 little-endian
+//   - posts ArrayBuffer chunks of ~320 samples each back to the main thread
+const WORKLET_SRC = `
+class PcmDownsampler extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.inSr  = sampleRate;                            // worklet global
+    this.outSr = options.processorOptions.outSr;        // e.g. 16000
+    this.ratio = this.inSr / this.outSr;
+    this.acc   = 0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || input.length === 0) return true;
+    const ch0 = input[0];
+    if (!ch0 || ch0.length === 0) return true;
+
+    const out = new Int16Array(Math.ceil(ch0.length / this.ratio) + 1);
+    let j = 0;
+    for (let i = 0; i < ch0.length; i++) {
+      this.acc += 1;
+      if (this.acc >= this.ratio) {
+        let s = ch0[i];
+        if (s > 1) s = 1; else if (s < -1) s = -1;
+        out[j++] = (s * 32767) | 0;
+        this.acc -= this.ratio;
+      }
+    }
+    if (j > 0) this.port.postMessage(out.slice(0, j).buffer, [out.slice(0, j).buffer]);
+    return true;
+  }
+}
+registerProcessor("pcm-downsampler", PcmDownsampler);
+`;
+
+let micCtx = null;
+let micStream = null;
+let micNode = null;
+let micSource = null;
+
+async function startMic(ws, stopFlag) {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  micCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+  await micCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+  micSource = micCtx.createMediaStreamSource(micStream);
+  micNode = new AudioWorkletNode(micCtx, "pcm-downsampler", {
+    processorOptions: { outSr: TURN_SR_OUT },
+  });
+  micNode.port.onmessage = (e) => {
+    if (stopFlag.stopped) return;
+    if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+  };
+  micSource.connect(micNode);
+}
+
+function stopMic() {
+  try { if (micSource) micSource.disconnect(); } catch (_) {}
+  try { if (micNode)   micNode.disconnect();   } catch (_) {}
+  try { if (micCtx)    micCtx.close();         } catch (_) {}
+  try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  micSource = micNode = micCtx = micStream = null;
+}
+
+// ----- Webcam capture (browser -> server video WS) -----------------
+//
+// Webcam-over-WebSocket capture was removed; the legacy "ws" transport is now
+// audio-only. The camera rides the WebRTC peer (below) on the default path.
+
+// ----- Webcam capture (WebRTC, B3) ----------------------------------
+//
+// Sibling of startVideoCapture / stopVideoCapture. Called when
+// /sessions/start response says video_transport === "webrtc".
+// Independent of the audio WS: if the peer fails, audio still works.
+
+let videoPc = null;
+let videoStreamWebRTC = null;
+
+async function startVideoCaptureWebRTC(offerUrl, iceServers) {
+  window.__videoOfferUrl = offerUrl;   // stashed for ICE restart later
+  try {
+    videoStreamWebRTC = await navigator.mediaDevices.getUserMedia({
+      video: { width: 854, height: 480, frameRate: 15 },
+      audio: false,
+    });
+  } catch (e) {
+    log(`camera unavailable (${e.name}); continuing audio-only`);
+    return;
+  }
+
+  const preview = $("cam-preview");
+  preview.classList.remove("hidden");
+  preview.srcObject = videoStreamWebRTC;
+
+  videoPc = new RTCPeerConnection({ iceServers });
+
+  // Surface state transitions; useful for the rollout phase. On
+  // "disconnected" (typically a mobile IP change) try an ICE restart;
+  // "failed" is unrecoverable without a fresh peer, so we accept the loss.
+  videoPc.onconnectionstatechange = async () => {
+    log(`webrtc state: ${videoPc.connectionState}`);
+    if (videoPc.connectionState === "disconnected") {
+      setTimeout(async () => {
+        if (videoPc && videoPc.connectionState === "disconnected") {
+          await tryIceRestart();
+        }
+      }, 2000);
+    } else if (videoPc.connectionState === "failed") {
+      log("webrtc connection failed; recording will be partial");
+    }
+  };
+  videoPc.oniceconnectionstatechange = () =>
+    log(`webrtc ice: ${videoPc.iceConnectionState}`);
+
+  // Add the video track. Server's @pc.on("track") fires after the answer
+  // is applied; the recorder picks up from there.
+  for (const track of videoStreamWebRTC.getVideoTracks()) {
+    videoPc.addTrack(track, videoStreamWebRTC);
+  }
+
+  // Order matters: addTrack -> createOffer -> setLocalDescription (kicks
+  // off ICE gathering) -> wait for gathering -> send SDP.
+  const offer = await videoPc.createOffer();
+  await videoPc.setLocalDescription(offer);
+  await waitIceGatheringComplete(videoPc, 5000);
+
+  // Constrain outbound bitrate to match B2's 500 kbps target.
+  await constrainBitrate(videoPc, 500000);
+
+  let answer;
+  try {
+    const r = await fetch(offerUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: videoPc.localDescription.sdp, type: "offer" }),
+    });
+    if (!r.ok) {
+      log(`webrtc offer rejected: ${r.status}`);
+      await stopVideoCaptureWebRTC();
+      return;
+    }
+    answer = await r.json();
+  } catch (e) {
+    log(`webrtc offer failed: ${e.message}`);
+    await stopVideoCaptureWebRTC();
+    return;
+  }
+
+  await videoPc.setRemoteDescription(answer);
+  log("webrtc video capture started");
+}
+
+// ICE restart: re-offer on the same peer with iceRestart so a mid-call
+// network change (cell-tower handoff, wifi->4G) recovers without losing
+// the recording. Server treats the second offer as a renegotiation.
+async function tryIceRestart() {
+  if (!videoPc || !window.__videoOfferUrl) return;
+  log("attempting ICE restart");
+  try {
+    const offer = await videoPc.createOffer({ iceRestart: true });
+    await videoPc.setLocalDescription(offer);
+    await waitIceGatheringComplete(videoPc, 5000);
+
+    const r = await fetch(window.__videoOfferUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: videoPc.localDescription.sdp, type: "offer" }),
+    });
+    if (!r.ok) {
+      log(`ICE restart rejected by server: ${r.status}`);
+      return;
+    }
+    const answer = await r.json();
+    await videoPc.setRemoteDescription(answer);
+    log("ICE restart complete");
+  } catch (e) {
+    // Don't tear down. The audio call continues; the recording is partial.
+    log(`ICE restart failed: ${e.message}`);
+  }
+}
+
+async function constrainBitrate(pc, maxBps) {
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === "video");
+  if (!sender) return;
+  const params = sender.getParameters();
+  if (!params.encodings) params.encodings = [{}];
+  params.encodings[0].maxBitrate = maxBps;
+  try { await sender.setParameters(params); }
+  catch (e) { log(`bitrate constraint failed: ${e.message}`); }
+}
+
+function waitIceGatheringComplete(pc, timeoutMs) {
+  // Resolve on "complete", OR once candidates stop arriving for a settle
+  // window, OR at timeoutMs as a hard cap. Some browsers never reach
+  // "complete" (extra interfaces, mDNS) and would otherwise burn the full
+  // cap even though their usable candidates arrived in <1s.
+  const SETTLE_MS = 800;
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    let settle = null;
+    const finish = () => {
+      clearTimeout(t);
+      if (settle) clearTimeout(settle);
+      pc.removeEventListener("icegatheringstatechange", handler);
+      pc.removeEventListener("icecandidate", onCandidate);
+      resolve();
+    };
+    const t = setTimeout(finish, timeoutMs);
+    const handler = () => {
+      if (pc.iceGatheringState === "complete") finish();
+    };
+    const onCandidate = (e) => {
+      if (settle) clearTimeout(settle);
+      if (e.candidate) settle = setTimeout(finish, SETTLE_MS);
+    };
+    pc.addEventListener("icegatheringstatechange", handler);
+    pc.addEventListener("icecandidate", onCandidate);
+  });
+}
+
+async function stopVideoCaptureWebRTC() {
+  try { if (videoPc) videoPc.close(); } catch (_) {}
+  try {
+    if (videoStreamWebRTC) videoStreamWebRTC.getTracks().forEach((t) => t.stop());
+  } catch (_) {}
+  const preview = $("cam-preview");
+  if (preview) { preview.srcObject = null; preview.classList.add("hidden"); }
+  videoPc = null;
+  videoStreamWebRTC = null;
+}
+
+// ===== Unified WebRTC media (Phase 1) ==============================
+//
+// One peer carries mic + camera into the server. Turns are driven over a
+// 'control' data channel. Agent audio still plays over HTTP in Phase 1.
+
+let mediaPc = null;
+let localStream = null;
+let controlChannel = null;
+let pendingTurn = null;       // {resolve, reject} for the in-flight turn
+let pendingAgentDone = null;  // {resolve} waiting for the agent to finish speaking
+let agentDoneSignals = 0;     // buffered agent_done count (signal may beat the waiter)
+
+async function getUnifiedStream(start) {
+  const audioOnly = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  // Server config can switch the whole video flow off (VIDEO_ENABLED=false):
+  // mic only — no camera prompt, no video m-line, no server-side decode.
+  if (start.video_enabled === false) {
+    log("video disabled by server config; audio-only call");
+    return await navigator.mediaDevices.getUserMedia({ audio: audioOnly });
+  }
+  // Bare values are only "ideal" (hints) — webcams ignore them and hand back
+  // their native mode (often 640x480@30, ~3x the pixels/sec we want), which
+  // overloads the server decode/encode and bakes green into the recording.
+  // `max` is a hard ceiling the browser MUST honour, so the camera is actually
+  // capped to the configured KYC-selfie size.
+  const W = start.capture_width || 640;
+  const H = start.capture_height || 360;
+  const FPS = start.capture_fps || 12;
+  const video = {
+    width: { ideal: W, max: W },
+    height: { ideal: H, max: H },
+    frameRate: { ideal: FPS, max: FPS },
+  };
+  const audio = audioOnly;
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio, video });
+  } catch (e) {
+    // Camera denied/absent: fall back to mic-only so the consent call still
+    // runs (the recording becomes audio_only at mux time). A mic-only denial
+    // here is fatal — there is no consent call without the customer's voice.
+    log(`camera unavailable (${e.name}); continuing audio-only`);
+    return await navigator.mediaDevices.getUserMedia({ audio });
+  }
+}
+
+async function startUnifiedMedia(start) {
+  window.__videoOfferUrl = start.video_offer_url;  // stashed for ICE restart
+  // Join-path instrumentation (client side): mirrors the server's JOIN_* logs
+  // so the click→offer gap can be split into camera / offer / ICE-gathering.
+  const joinT0 = performance.now();
+  const stepLog = (name, t0) =>
+    log(`JOIN ${name} ${((performance.now() - t0) / 1000).toFixed(3)}s`);
+  let t0 = performance.now();
+  localStream = await getUnifiedStream(start);
+  stepLog("getUserMedia", t0);
+
+  const preview = $("cam-preview");
+  if (localStream.getVideoTracks().length) {
+    preview.classList.remove("hidden");
+    preview.srcObject = localStream;
+  }
+
+  mediaPc = new RTCPeerConnection({ iceServers: start.ice_servers || [] });
+
+  // The server sends the agent's voice back on this peer's inbound audio track.
+  // Route it to the hidden <audio> element. The form-submit gesture earlier in
+  // the flow satisfies autoplay; play() is best-effort regardless.
+  mediaPc.ontrack = (e) => {
+    if (e.track.kind !== "audio") return;
+    const audioEl = $("agent-audio");
+    audioEl.srcObject = e.streams[0] || new MediaStream([e.track]);
+    audioEl.play().catch((err) => log(`agent audio autoplay blocked: ${err.message}`));
+    log("agent audio track attached");
+  };
+
+  mediaPc.onconnectionstatechange = async () => {
+    log(`webrtc state: ${mediaPc.connectionState}`);
+    if (mediaPc.connectionState === "disconnected") {
+      setTimeout(() => {
+        if (mediaPc && mediaPc.connectionState === "disconnected") tryIceRestartUnified();
+      }, 2000);
+    } else if (mediaPc.connectionState === "failed") {
+      log("webrtc connection failed; recording will be partial");
+    }
+  };
+  mediaPc.oniceconnectionstatechange = () => log(`webrtc ice: ${mediaPc.iceConnectionState}`);
+
+  // Open the control channel BEFORE creating the offer so it is negotiated in
+  // the SDP. The server starts its turn loop when this channel opens.
+  controlChannel = mediaPc.createDataChannel("control");
+  controlChannel.onopen = () => log("control channel open");
+  controlChannel.onmessage = handleControlMessage;
+
+  for (const track of localStream.getTracks()) mediaPc.addTrack(track, localStream);
+
+  t0 = performance.now();
+  const offer = await mediaPc.createOffer();
+  await mediaPc.setLocalDescription(offer);
+  stepLog("createOffer+setLocal", t0);
+  t0 = performance.now();
+  await waitIceGatheringComplete(mediaPc, 5000);
+  stepLog(`iceGathering(state=${mediaPc.iceGatheringState})`, t0);
+  await constrainBitrate(mediaPc, 500000);
+
+  t0 = performance.now();
+  const r = await fetch(start.video_offer_url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: mediaPc.localDescription.sdp, type: "offer" }),
+  });
+  if (!r.ok) throw new Error(`offer rejected: ${r.status}`);
+  await mediaPc.setRemoteDescription(await r.json());
+  stepLog("offerExchange", t0);
+  stepLog("JOIN_COMPLETE(client)", joinT0);
+  log("unified webrtc media started");
+  await waitChannelOpen(controlChannel, 8000);
+}
+
+function waitChannelOpen(ch, timeoutMs) {
+  if (ch && ch.readyState === "open") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("control channel open timeout")), timeoutMs);
+    ch.addEventListener("open", () => { clearTimeout(t); resolve(); });
+  });
+}
+
+function handleControlMessage(event) {
+  let msg;
+  try { msg = JSON.parse(event.data); } catch (_) { return; }
+  if (msg.type === "vad") {
+    if (msg.signal === "START_SPEECH") setIndicator("listen", "Listening…");
+    else if (msg.signal === "END_SPEECH") setIndicator("speak", "Processing…");
+  } else if (msg.type === "final") {
+    userText.textContent = msg.transcript ? `You said: "${msg.transcript}"` : "(no speech detected)";
+    log(`turn ${msg.turn_index}: intent=${msg.intent}  state=${msg.state}`);
+    sessionStatus = msg.status;
+    if (pendingTurn) { pendingTurn.resolve(msg); pendingTurn = null; }
+  } else if (msg.type === "agent_done") {
+    // The agent has finished speaking over the track — safe to start the next
+    // turn. The signal can arrive before anyone awaits it (greeting), so buffer.
+    setIndicator("listen", "");
+    if (pendingAgentDone) { pendingAgentDone.resolve(msg); pendingAgentDone = null; }
+    else agentDoneSignals++;
+  } else if (msg.type === "error") {
+    if (pendingTurn) { pendingTurn.reject(new Error(msg.message || "server error")); pendingTurn = null; }
+  }
+}
+
+// One turn: tell the server to start listening, resolve when it sends the
+// final result back over the data channel.
+function runTurnWebRTC() {
+  return new Promise((resolve, reject) => {
+    pendingTurn = { resolve, reject };
+    setIndicator("listen", "Listening — speak when ready");
+    try { controlChannel.send(JSON.stringify({ type: "start_turn" })); }
+    catch (e) { pendingTurn = null; reject(e); }
+  });
+}
+
+// Resolve once the agent has finished speaking (server {type:agent_done}).
+// Consumes a buffered signal if one already arrived (e.g. for the greeting).
+function waitForAgentDone() {
+  if (agentDoneSignals > 0) { agentDoneSignals--; return Promise.resolve(); }
+  return new Promise((resolve) => { pendingAgentDone = { resolve }; });
+}
+
+async function tryIceRestartUnified() {
+  if (!mediaPc || !window.__videoOfferUrl) return;
+  log("attempting ICE restart");
+  try {
+    const offer = await mediaPc.createOffer({ iceRestart: true });
+    await mediaPc.setLocalDescription(offer);
+    await waitIceGatheringComplete(mediaPc, 5000);
+    const r = await fetch(window.__videoOfferUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: mediaPc.localDescription.sdp, type: "offer" }),
+    });
+    if (!r.ok) { log(`ICE restart rejected by server: ${r.status}`); return; }
+    await mediaPc.setRemoteDescription(await r.json());
+    log("ICE restart complete");
+  } catch (e) {
+    log(`ICE restart failed: ${e.message}`);
+  }
+}
+
+async function stopUnifiedMedia() {
+  try {
+    if (controlChannel && controlChannel.readyState === "open") {
+      controlChannel.send(JSON.stringify({ type: "end" }));
+    }
+  } catch (_) {}
+  try { if (mediaPc) mediaPc.close(); } catch (_) {}
+  try { if (localStream) localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  const preview = $("cam-preview");
+  if (preview) { preview.srcObject = null; preview.classList.add("hidden"); }
+  const audioEl = $("agent-audio");
+  if (audioEl) audioEl.srcObject = null;
+  mediaPc = null; localStream = null; controlChannel = null;
+  pendingTurn = null; pendingAgentDone = null; agentDoneSignals = 0;
+}
+
+// Poll GET /sessions/{sid} until recording_status leaves "pending".
+async function pollRecordingStatus() {
+  if (!sessionId) return;
+  const statusEl = $("recording-status");
+  statusEl.classList.remove("hidden");
+  statusEl.textContent = "Finalising recording…";
+  for (let i = 0; i < 40; i++) {  // ~2 min cap at 3s/poll
+    let info;
+    try {
+      const r = await fetch(`/api/v1/sessions/${sessionId}`);
+      if (!r.ok) break;
+      info = await r.json();
+    } catch (_) { break; }
+    if (info.recording_status && info.recording_status !== "pending") {
+      log(`recording status: ${info.recording_status}`);
+      if (info.full_call_video_url) {
+        statusEl.innerHTML =
+          `Recording ready (${info.recording_status}): ` +
+          `<a href="${info.full_call_video_url}" target="_blank" rel="noopener">full_call.mp4</a>`;
+      } else {
+        statusEl.textContent = `Recording ${info.recording_status} — no video file produced.`;
+      }
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  statusEl.textContent = "Recording still processing — check back shortly.";
+}
+
+// ----- Session driver ---------------------------------------------
+
+let sessionId = null;
+let sessionStatus = "active";
+let recordingPollStarted = false;
+
+async function startSession(formValues) {
+  const payload = { ...formValues };
+  // Drop optional fields the user left blank so Pydantic uses its own defaults.
+  for (const k of ["alternative_mobile", "nominee_name", "room_name", "video_transport"]) {
+    if (!payload[k]) delete payload[k];
+  }
+  const r = await fetch("/api/v1/sessions/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`start ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+async function endSession() {
+  if (!sessionId) return;
+  // Stop whichever media path is live.
+  if (mediaPc) {
+    await stopUnifiedMedia();
+  } else if (videoPc) {
+    await stopVideoCaptureWebRTC();
+  }
+  try {
+    await fetch(`/api/v1/sessions/${sessionId}/end`, { method: "POST" });
+  } catch (_) {}
+  // Mux runs server-side in the background; poll for the final status once.
+  if (!recordingPollStarted) {
+    recordingPollStarted = true;
+    pollRecordingStatus();  // fire-and-forget; updates the UI when ready
+  }
+}
+
+async function runTurn() {
+  return new Promise(async (resolve, reject) => {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${location.host}/api/v1/sessions/${sessionId}/turn-stream`);
+    ws.binaryType = "arraybuffer";
+    const stopFlag = { stopped: false };
+
+    ws.onopen = async () => {
+      setIndicator("listen", "Listening — speak when ready");
+      try { await startMic(ws, stopFlag); }
+      catch (e) { reject(e); ws.close(); }
+    };
+
+    ws.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); }
+      catch (_) { return; }
+      if (msg.type === "vad") {
+        if (msg.signal === "START_SPEECH") {
+          setIndicator("listen", "Listening…");
+        } else if (msg.signal === "END_SPEECH") {
+          setIndicator("speak", "Processing…");
+          stopFlag.stopped = true;
+          stopMic();
+        }
+      } else if (msg.type === "final") {
+        userText.textContent = msg.transcript ? `You said: "${msg.transcript}"` : "(no speech detected)";
+        log(`turn ${msg.turn_index}: intent=${msg.intent}  state=${msg.state}`);
+        sessionStatus = msg.status;
+        stopFlag.stopped = true;
+        stopMic();
+        ws.close();
+        resolve(msg);
+      } else if (msg.type === "error") {
+        stopFlag.stopped = true;
+        stopMic();
+        reject(new Error(msg.message || "server error"));
+      }
+    };
+
+    ws.onerror = () => { reject(new Error("websocket error")); };
+    ws.onclose  = () => { stopFlag.stopped = true; stopMic(); };
+  });
+}
+
+async function runSession(formValues) {
+  startForm.classList.add("hidden");
+  sessionPanel.classList.remove("hidden");
+  setIndicator("", "Starting session…");
+  setStatusPill("active");
+  log("starting session");
+
+  let start;
+  try { start = await startSession(formValues); }
+  catch (e) { setIndicator("error", `Failed to start: ${e.message}`); return; }
+
+  sessionId = start.session_id;
+  sessionStatus = "active";
+  recordingPollStarted = false;
+  agentText.textContent = start.agent_text;
+  log(`session_id=${sessionId.slice(0, 8)}…  transport=${start.video_transport}`);
+
+  if (start.video_transport === "webrtc") {
+    await runSessionWebRTC(start);
+  } else {
+    await runSessionLegacy(start);
+  }
+}
+
+// Unified WebRTC: mic+cam on one peer, agent voice on the inbound track,
+// turns over the data channel.
+async function runSessionWebRTC(start) {
+  try {
+    await startUnifiedMedia(start);
+  } catch (e) {
+    setIndicator("error", `Media setup failed: ${e.message}`);
+    log(`media setup error: ${e.message}`);
+    return;
+  }
+
+  // The server speaks the greeting over the inbound track as soon as the
+  // channel opens; wait for its agent_done before listening.
+  setIndicator("speak", "Agent speaking…");
+  await waitForAgentDone();
+
+  while (sessionStatus === "active") {
+    let turn;
+    try { turn = await runTurnWebRTC(); }       // start_turn -> {type:final}
+    catch (e) {
+      setIndicator("error", `Turn failed: ${e.message}`);
+      log(`turn error: ${e.message}`);
+      break;
+    }
+    if (turn.agent_text) agentText.textContent = turn.agent_text;
+    setStatusPill(turn.status);
+    sessionStatus = turn.status;
+    // The reply plays over the track; wait until the agent is done before the
+    // next turn so we don't capture its tail (or start listening too early).
+    setIndicator("speak", "Agent speaking…");
+    await waitForAgentDone();
+    if (sessionStatus !== "active") break;
+  }
+
+  setIndicator(sessionStatus === "completed" ? "speak" : "error",
+               `Session ${sessionStatus}`);
+  log(`session ended: ${sessionStatus}`);
+  await endSession();
+}
+
+// Legacy fallback: per-turn /turn-stream WS for the mic + /stream/{turn} for
+// agent audio. Audio-only since webcam-over-WS was removed. Only reached when
+// the server selects the "ws" transport.
+async function runSessionLegacy(start) {
+  try {
+    await playPcmStream(start.agent_audio_stream_url);
+  } catch (e) {
+    setIndicator("error", `Audio error: ${e.message}`);
+    return;
+  }
+
+  while (sessionStatus === "active") {
+    let turn;
+    try { turn = await runTurn(); }
+    catch (e) {
+      setIndicator("error", `Turn failed: ${e.message}`);
+      log(`turn error: ${e.message}`);
+      break;
+    }
+
+    if (turn.agent_text) agentText.textContent = turn.agent_text;
+    if (turn.agent_audio_stream_url) {
+      try { await playPcmStream(turn.agent_audio_stream_url); }
+      catch (e) { log(`agent audio error: ${e.message}`); }
+    }
+
+    setStatusPill(turn.status);
+    if (turn.status !== "active") {
+      sessionStatus = turn.status;
+      break;
+    }
+  }
+
+  setIndicator(sessionStatus === "completed" ? "speak" : "error",
+               `Session ${sessionStatus}`);
+  log(`session ended: ${sessionStatus}`);
+  await endSession();
+}
+
+// ----- Wire UI ----------------------------------------------------
+
+function collectFormValues() {
+  const text = (id) => $(id).value.trim();
+  const num  = (id) => Number($(id).value);
+  return {
+    language:              text("language") || "english",
+    company_id:            num("company-id"),
+    workspace_id:          num("workspace-id"),
+    room_name:             text("room-name"),
+    customer_name:         text("customer-name"),
+    insured_name:          text("insured-name") || text("customer-name"),
+    primary_mobile:        text("primary-mobile"),
+    alternative_mobile:    text("alternative-mobile"),
+    email:                 text("email"),
+    address:               text("address"),
+    company:               text("company"),
+    plan_name:             text("plan-name"),
+    policy_term:           num("policy-term"),
+    premium_amount:        text("premium-amount"),
+    premium_paying_term:   num("premium-paying-term"),
+    premium_frequency:     text("premium-frequency"),
+    sum_insured:           text("sum-insured"),
+    application_date:      text("application-date"),
+    dob_life_assured:      text("dob-life-assured"),
+    free_look_period:      num("free-look-period"),
+    currency:              text("currency") || "INR",
+    relation_to_insured:   text("relation-to-insured") || "myself",
+    premium_payment_mode:  text("premium-payment-mode"),
+    gender:                text("gender"),
+    nominee_name:          text("nominee-name"),
+    video_transport:       text("video-transport"),
+  };
+}
+
+startForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  startBtn.disabled = true;
+  runSession(collectFormValues()).catch((err) => {
+    setIndicator("error", `Fatal: ${err.message}`);
+    log(`fatal: ${err.message}`);
+  });
+});
+
+endBtn.addEventListener("click", async () => {
+  await endSession();
+  setIndicator("", "Session ended by user");
+  setStatusPill("failed");
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+recordings/
+.env
+intent/models/sentence_encoder/
+
+# generated/test artifacts
+out.mp4
+.DS_Store

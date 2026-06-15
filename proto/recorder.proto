@@ -1,0 +1,18 @@
+// proto/recorder.proto
+syntax = "proto3";
+package recorder;
+option go_package = "kyc/proto/recorder;recorderpb";
+
+enum Kind { VIDEO_AU = 0; USER_PCM = 1; AGENT_PCM = 2; }
+
+message Frame {
+  string session_id = 1;
+  Kind   kind       = 2;
+  uint64 ts_us      = 3;   // monotonic microseconds since this stream's first frame
+  bytes  data       = 4;   // VIDEO_AU: one H264 access unit (Annex-B). *_PCM: s16le mono 48kHz
+}
+message Ack { uint64 frames = 1; }
+
+service Recorder {
+  rpc RecordStream(stream Frame) returns (Ack);   // client-streaming: many Frames in, one Ack out
+}
