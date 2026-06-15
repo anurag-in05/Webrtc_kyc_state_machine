@@ -318,6 +318,7 @@ credentials or network.
 | G3 | `stt` (Sarvam WS) + `audio` resampler | offline WS-server tests: framing fidelity, vendor error, wall-clock timeout, drop-oldest, sample-exact resample | ✅ done |
 | G4 | `tts` (ElevenLabs) + AgentSink seam + upsampler | stub-HTTP tests: plan exec, per-chunk call_us, silence bytes, normal/slow payload, sample-exact upsample | ✅ done |
 | G5 | `control` /control WS + real AgentSink (SendAt) | WS-client tests: text/binary discipline, sink call_us passthrough, tee-survives-WS-drop | ✅ done |
+| G6 | `brainclient` (GET snapshot, POST turn) | round-trips canned CONTRACTS §1 responses field-for-field; failures → error | ✅ done |
 
 ### Phase G0 — scaffold + the one-origin call clock
 - **The clock is made structural, not conventional.** `internal/gateway/session/`
@@ -550,6 +551,25 @@ credentials or network.
 - No new deps (gorilla already present). Verified: build/vet/gofmt clean; full
   `go test ./...` green (incl. `-race`); one-origin grep == 1; boot smoke
   (control-before-offer → 404).
+
+### Phase G6 — brainclient (control-plane HTTP)
+- `internal/gateway/brainclient/`: thin client for the brain (CONTRACTS §1).
+  `Get(ctx,id)` → `GET /api/v1/sessions/{id}` (bootstrap snapshot); `Turn(ctx,id,
+  transcript)` → `POST /api/v1/sessions/{id}/turn`. Paths match the brain's actual
+  router (`prefix=/api/v1/sessions`).
+- `Snapshot`/`TurnResponse` mirror the brain's Pydantic models field-for-field;
+  `tts_plan` decodes into `[]tts.PlanItem` (one source of truth, handed straight to
+  `tts.Speak`). Doc note: the brain's `TurnResponse` carries `session_id` though
+  CONTRACTS §1's *example* omits it — we mirror the brain.
+- **No retries, no circuit breakers** (hard-invariant 2): unreachable / non-200 /
+  malformed-JSON each return an error; the turn loop folds it to please_repeat.
+  `ctx` is passed through (the turn loop sets the deadline — G7 checklist item 1).
+- Tests: round-trip the CONTRACTS §1 turn + snapshot examples (with the §4 tts_plan
+  inlined) verbatim — every plan item, voice/model, events, status asserted — plus
+  the request shape (`POST …/turn` with `{"transcript":…}`), and all three failure
+  modes → error. `-race`.
+- No new deps. Verified: build/vet/gofmt clean; full `go test ./...` green; one-origin
+  grep == 1.
 
 ## G7 checklist (carried forward — do not lose)
 Items deferred to G7 (the turn loop + teardown phase), recorded as we go:
