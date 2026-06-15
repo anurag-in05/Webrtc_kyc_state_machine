@@ -223,7 +223,7 @@ owns session state + the consent flow and never touches media.
 | # | Phase | Check | Status |
 |---|-------|-------|--------|
 | B1 | trims: config, schemas, session_manager, metrics shim, rm tts_reference, reqs | all modules import clean | ✅ done |
-| B2 | `services/tts_plan.py` (split + resolve helpers) | plan matches CONTRACTS §4 | ⏳ |
+| B2 | `services/tts_plan.py` (split + resolve helpers) | plan matches CONTRACTS §4 | ✅ done |
 | B3 | `storage/` + recap port + `routes/sessions.py` + `main.py` | app imports, TestClient | ⏳ |
 | B4 | verbatim tests (zip) + new API smoke test | pytest green | ⏳ |
 
@@ -237,3 +237,12 @@ owns session state + the consent flow and never touches media.
 - `session_manager.py`: in-memory rewrite per Option 1.
 - `metrics.py`: no-op shim. `tts_reference.py`: deleted. `requirements.txt`: added.
 - Verified: every kept/trimmed module imports clean (`openai` absent → graceful).
+
+### Phase B2 — tts_plan
+- `services/tts_plan.py`: `build_tts_plan(agent_text)` ports the old
+  `synthesize_stream` split (`re.split(r"(<var>.*?</var>)")` + `_spoken_len` /
+  `_speed_for` / `_slow_down_var_text`) to emit segments instead of calling
+  ElevenLabs. `<var>` → silence/slow-speech/silence; else normal-pace speech.
+  Plus `resolve_voice_id`/`resolve_model_id` (pack → env → default).
+- Verified the plan byte-for-byte against the CONTRACTS §4 example, the empty /
+  no-var cases, and the resolvers (english→default voice, hindi→pack voice).
