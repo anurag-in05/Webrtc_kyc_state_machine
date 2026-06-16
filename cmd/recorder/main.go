@@ -17,8 +17,16 @@ func main() {
 	httpAddr := getenv("HTTP_ADDR", ":9090")
 	dir := getenv("RECORDINGS_DIR", "./recordings")
 
+	// S3 upload at finalize. Nil when AWS_S3_BUCKET is unset → local URLs.
+	s3 := recorder.NewS3Uploader(
+		os.Getenv("AWS_S3_BUCKET"),
+		os.Getenv("AWS_MEDIA_FOLDER"),
+		os.Getenv("AWS_REGION"),
+		os.Getenv("AWS_URL"),
+	)
+
 	// HTTP control plane: /finalize + /status. Runs in its own goroutine.
-	api := recorder.NewHTTPAPI(dir)
+	api := recorder.NewHTTPAPI(dir, s3)
 	go func() {
 		log.Printf("recorder: HTTP on %s", httpAddr)
 		if err := http.ListenAndServe(httpAddr, api.Handler()); err != nil {

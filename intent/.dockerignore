@@ -1,0 +1,11 @@
+# Intent build context (./intent). The Dockerfile does `COPY . /app`, so drop
+# everything that shouldn't ship — especially models/sentence_encoder/, the
+# ~465 MB local encoder, which the build re-bakes (the baked copy is authoritative).
+.venv
+**/__pycache__
+**/*.pyc
+models/sentence_encoder/
+.claude/
+CLAUDE.md
+Dockerfile
+.env

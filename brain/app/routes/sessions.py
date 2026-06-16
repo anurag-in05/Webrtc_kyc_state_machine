@@ -99,7 +99,7 @@ async def start_session(request: StartSessionRequest) -> StartSessionResponse:
         language=language,
         turn_index=session.turn_index,
         ice_servers=_ice_servers(),
-        gateway_offer_url=f"{settings.gateway_url}/sessions/{session.session_id}/offer",
+        gateway_offer_url=f"{settings.gateway_public_url}/sessions/{session.session_id}/offer",
         capture_width=settings.capture_width,
         capture_height=settings.capture_height,
         capture_fps=settings.capture_fps,

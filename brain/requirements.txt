@@ -8,8 +8,8 @@ httpx
 loguru
 openai            # name/address transliteration (graceful no-op without OPENAI_API_KEY)
 
-# Transcript S3 upload path only (aws_storage=s3); local-dir fallback needs nothing.
-# boto3
+# Transcript S3 upload path (aws_storage=s3); local-dir fallback works without it.
+boto3
 
 # Tests
 pytest

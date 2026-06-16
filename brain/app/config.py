@@ -36,11 +36,14 @@ class Settings(BaseSettings):
     aws_region: str = ""
     aws_url: str = ""
 
-    # Downstream Go services. gateway_url builds the gateway_offer_url returned by
-    # /start and receives POST /close on /end; recorder_url is proxied for the
-    # live recording_status. Both calls are best-effort (the brain runs without
-    # them up, e.g. curl tests).
+    # Downstream Go services. gateway_url is the brain→gateway address (server to
+    # server): it receives POST /close on /end. gateway_public_url is the address
+    # the BROWSER uses for its WebRTC offer — different from gateway_url under
+    # Docker, where the browser sits outside the network (internal DNS won't
+    # resolve) and must reach the published host port. recorder_url is proxied for
+    # the live recording_status. All best-effort (the brain runs without them up).
     gateway_url: str = "http://localhost:8080"
+    gateway_public_url: str = "http://localhost:8080"
     recorder_url: str = "http://localhost:9090"
 
     # TTS pacing read by the tts-plan builder: phrases whose spoken length is

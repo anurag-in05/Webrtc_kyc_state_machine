@@ -658,3 +658,98 @@ credentials or network.
 3. **Live audio wiring** ✅ G7a — `OnTrack(audio)` → `Downsampler` → `MicBuffer` →
    `stt.Run`, gated by the listening window.
 
+---
+
+# Deploy — containerization + S3 upload + compose
+
+Step 4 of the build order, the deploy plane: package all four services as images,
+wire them with one `docker compose`, and close the last real S3 gap (the recorder
+was still writing local-only URLs). No new product behavior — this is the box the
+existing code runs in.
+
+## Findings (before code)
+
+- The recorder's `runFinalize` had a `// no S3 yet` local-dir fallback; the brain's
+  `s3.py` still uploaded `*.mp4`. But per CONTRACTS §3 the **recorder** owns the
+  MP4 now and the **brain** owns the transcripts — the S3 ownership was split in
+  the design but not in the upload code.
+- The intent service still imported `from services.intent.classifier` (the old
+  nested layout) via a gitignored `services/intent → ../intent` symlink shim. Fine
+  for local dev, wrong for a self-contained image that ships only `intent/`.
+- The two Go services are one module rooted at the repo; their images must build
+  from the repo root, the Python ones from their own dirs.
+
+## Decisions (confirmed with the user)
+
+- **Split the gateway URL the brain hands out.** `gateway_offer_url` is consumed by
+  the **browser** (it POSTs its WebRTC offer there); `/close` is consumed by the
+  **brain** (server→server). Under Docker these are different addresses — the
+  browser is outside the network and can't resolve `gateway`, so it needs the
+  published host port. New `gateway_public_url` config (browser-facing, default
+  `http://localhost:8080`) feeds `gateway_offer_url`; `gateway_url` (internal,
+  `http://gateway:8080` in compose) still feeds `/close`. Without this the offer
+  POST fails with a DNS error on localhost-compose — a real defect, not a caveat.
+- **Write `docs/DEPLOYMENT.md`** (compose + `.env.example` reference it): env-var
+  table, build/run, the localhost-vs-prod gateway-URL note, coturn prod config,
+  S3/IAM.
+
+## Phase log
+
+### Recorder — S3 upload at finalize
+- `internal/recorder/s3.go`: `S3Uploader` (aws-sdk-go-v2 + `manager.Uploader`).
+  `NewS3Uploader` returns **nil** when `AWS_S3_BUCKET` is unset or AWS config fails
+  to load → finalize keeps local URLs (invariant 4: a missing/failed upload
+  degrades the recording, never fails the call). `upload` streams the file handle
+  (never whole-into-memory), `video/mp4` + SSE-AES256.
+- `s3Key`/`s3URL` mirror `brain/app/storage/s3.py` exactly — `{folder}/{sid}/{file}`
+  (folder omitted when empty), each URL segment `url.PathEscape`d — so recorder MP4
+  URLs and brain transcript URLs share the per-session prefix and the same encoding.
+- `httpapi.go`: `runFinalize` uploads the produced mp4 when S3 is configured, else
+  keeps the local path; `NewHTTPAPI(dir, s3)` gains the uploader; `main.go` builds
+  it from the `AWS_*` env. Credentials via the standard chain (env / shared config
+  / IAM role) → blank keys on EC2 use the instance role.
+- `s3_test.go`: local-fallback (nil uploader → URL = local path, no network) over
+  nothing-captured + audio-only; and `TestS3KeyAndURL` pins the key/URL scheme
+  (incl. a folder with a space → `%20`) against the brain's.
+- Deps: aws-sdk-go-v2 `config` + `feature/s3/manager` + `service/s3` (+ indirects).
+  `go mod tidy` is a no-op afterwards.
+
+### Brain — transcripts to S3 (MP4 ownership moved out)
+- `s3.py`: `S3_UPLOAD_SUFFIXES` flipped `(".mp4",)` → `(".json", ".txt")` — the
+  brain pushes the transcript artifacts it writes (`recap.py`); the recorder pushes
+  the MP4. Docstring updated; logic otherwise unchanged (same boto3 chain + local
+  fallback). `boto3` uncommented in `requirements.txt`.
+
+### Intent — flat, self-contained layout
+- `service.py` / image now use `from classifier import …` and run
+  `uvicorn service:app` (was `services.intent.service:app`). `requirements.txt`
+  dropped the `-r ../../requirements-base.txt` indirection for an explicit list
+  (fastapi, uvicorn, sentence-transformers, scikit-learn, numpy, joblib, loguru).
+  `models/` resolves via `Path(__file__).parent` → correct flat **and** in-image.
+  The local `services/` symlink shim stays gitignored for `uvicorn` dev runs.
+
+### Containers + compose
+- Dockerfiles: **gateway** — distroless/static, `CGO_ENABLED=0` static binary,
+  ships `web/`; **recorder** — debian-slim + ffmpeg (the one finalize combine),
+  non-root, owns `/recordings`; **brain** — slim venv multi-stage, non-root;
+  **intent** — builder bakes CPU-only torch (PyTorch CPU index, first, so
+  sentence-transformers resolves against it) + the MiniLM encoder, slim runtime.
+  All non-root, all with healthchecks. `.dockerignore` per context (repo-root one
+  trims to the Go inputs; intent's drops the re-baked `sentence_encoder/`).
+- `docker-compose.yml`: control plane (intent unpublished + brain `:8000`) and
+  media plane (recorder `:9090/:9091`, gateway `:8080`); coturn host-net, PROD-ONLY,
+  not started by default. `.env.example` documents every secret; blanks degrade
+  (no S3 → local, no TURN → host candidates, no OpenAI → transliteration no-op).
+- `gateway_public_url` split: `config.py` adds the field, `routes/sessions.py`
+  builds `gateway_offer_url` from it, compose sets `GATEWAY_PUBLIC_URL:
+  http://localhost:8080` alongside the internal `GATEWAY_URL`. Env binding verified
+  (a `GATEWAY_PUBLIC_URL` override reaches the field; `gateway_url` stays internal).
+- `docs/DEPLOYMENT.md`: the deploy wiring doc the compose + `.env.example` point at.
+
+### Verified
+- `go build`/`vet` clean; full `go test ./...` green (incl. the new recorder S3
+  tests); `go mod tidy` no-op; new `s3.go`/`s3_test.go` gofmt-clean; one-origin
+  grep still == 1 (this phase doesn't touch the gateway clock).
+- Brain `config`/`routes.sessions` import; both gateway URLs bind from env.
+- `docker compose config` parses (warnings are just unset secrets in the test shell).
+

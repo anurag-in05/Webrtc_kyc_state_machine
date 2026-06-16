@@ -1,0 +1,77 @@
+# VideoKYC — local + single-box stack. Secrets come from .env (see .env.example).
+# Two planes: control (intent, brain) and media (recorder, gateway). coturn is
+# prod-only NAT traversal; skip it on localhost.
+services:
+  # Control plane — shared model container. ~1.5 GB ensemble loaded once.
+  intent:
+    build: ./intent
+    environment:
+      WARM_MODELS_ON_STARTUP: "true"
+    # No published port: the brain reaches it in-network as http://intent:8000.
+
+  # Control plane — session state, consent flow, transcripts. Text only.
+  brain:
+    build: ./brain
+    ports: ["8000:8000"]
+    environment:
+      INTENT_SERVICE_URL: http://intent:8000
+      GATEWAY_URL: http://gateway:8080          # brain→gateway /close (in-network)
+      GATEWAY_PUBLIC_URL: http://localhost:8080 # browser's WebRTC offer (host port); set to the public address in prod
+      RECORDER_URL: http://recorder:9090        # proxied for live recording_status
+      OPENAI_API_KEY: ${OPENAI_API_KEY}  # name/address transliteration (no-op if unset)
+      # Transcript artifacts → S3 (graceful local fallback if bucket/creds unset).
+      AWS_STORAGE: s3
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_MEDIA_FOLDER: ${AWS_MEDIA_FOLDER}
+      AWS_REGION: ${AWS_REGION}
+      AWS_URL: ${AWS_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}        # omit on EC2 → IAM role
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # ICE/TURN echoed to the browser in /start so it can reach the gateway.
+      TURN_URL: ${TURN_URL}
+      TURN_USERNAME: ${TURN_USERNAME}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL}
+    depends_on: [intent]
+
+  # Media plane — durable capture: gRPC ingest → crash-safe files → ffmpeg → S3.
+  recorder:
+    build:
+      context: .
+      dockerfile: cmd/recorder/Dockerfile
+    ports: ["9090:9090", "9091:9091"] # http, grpc
+    environment:
+      HTTP_ADDR: ":9090"
+      GRPC_ADDR: ":9091"
+      RECORDINGS_DIR: /recordings
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_MEDIA_FOLDER: ${AWS_MEDIA_FOLDER}
+      AWS_REGION: ${AWS_REGION}
+      AWS_URL: ${AWS_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}        # omit on EC2 → IAM role
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    volumes: ["./recordings:/recordings"]
+
+  # Media plane — terminates the one WebRTC peer, STT/TTS, drives the turn loop.
+  gateway:
+    build:
+      context: .
+      dockerfile: cmd/gateway/Dockerfile
+    ports: ["8080:8080"]
+    environment:
+      PORT: "8080"
+      BRAIN_URL: http://brain:8000
+      RECORDER_GRPC_ADDR: recorder:9091
+      RECORDER_HTTP_URL: http://recorder:9090
+      SARVAM_API_KEY: ${SARVAM_API_KEY}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
+      TURN_URL: ${TURN_URL}
+      TURN_USERNAME: ${TURN_USERNAME}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL}
+    depends_on: [brain, recorder]
+
+  # NAT traversal for SRTP across the internet. Host networking so it can relay
+  # on the box's public IP. PROD ONLY — configure --external-ip etc. (see
+  # docs/DEPLOYMENT.md). Skip on localhost.
+  coturn:
+    image: coturn/coturn
+    network_mode: host

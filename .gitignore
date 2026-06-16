@@ -11,3 +11,4 @@ out.mp4
 
 # local-dev intent shim (intent service code expects services/intent/)
 /services/
+*.png

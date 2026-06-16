@@ -1,9 +1,11 @@
-# Intent service image (services/intent/Dockerfile) ONLY — model + classification.
-# torch (CPU) is installed separately in the Dockerfile from the PyTorch CPU
-# index; sentence-transformers pulls it in. No media/storage deps here.
-# The -r path is relative to THIS file (pip semantics), so it resolves both
-# from the repo root and inside the image build (which mirrors the layout).
--r ../../requirements-base.txt
+# Intent service deps — the model + classification stack only (CPU). The Docker
+# build installs CPU-only torch from the PyTorch CPU index first; sentence-
+# transformers then resolves against it. No media/storage deps here. pydantic
+# comes in via fastapi.
+fastapi
+uvicorn
 sentence-transformers
 scikit-learn
+numpy
 joblib
+loguru

@@ -3,9 +3,9 @@
 Own process/container so the ~1.5 GB ensemble loads once and is shared by every
 app pointing INTENT_SERVICE_URL at it. Reuses the in-process classifier, so the
 voting + please_repeat fold (CLAUDE.md invariant #5) are identical.
-Self-contained (no app.* imports) so its Docker image ships only services/intent/.
+Self-contained (no app.* imports) so its Docker image ships only intent/.
 
-Run:  uvicorn services.intent.service:app --host 0.0.0.0 --port 8000
+Run:  uvicorn service:app --host 0.0.0.0 --port 8000
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from loguru import logger
 from pydantic import BaseModel
 
-from services.intent.classifier import intent_classifier
+from classifier import intent_classifier
 
 
 def _warm_on_startup() -> bool:

@@ -1,7 +1,9 @@
 package recorder
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -17,6 +19,7 @@ import (
 // here, since only these two endpoints touch it.
 type HTTPAPI struct {
 	dir string
+	s3  *S3Uploader // nil when S3 is unconfigured → finalize keeps local URLs
 
 	mu     sync.Mutex
 	status map[string]Status // session_id → latest finalize status
@@ -28,8 +31,8 @@ type Status struct {
 	URL   string `json:"url"`    // path/URL to full_call.mp4, or ""
 }
 
-func NewHTTPAPI(dir string) *HTTPAPI {
-	return &HTTPAPI{dir: dir, status: map[string]Status{}}
+func NewHTTPAPI(dir string, s3 *S3Uploader) *HTTPAPI {
+	return &HTTPAPI{dir: dir, s3: s3, status: map[string]Status{}}
 }
 
 func (h *HTTPAPI) Handler() http.Handler {
@@ -50,8 +53,19 @@ func (h *HTTPAPI) handleFinalize(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPAPI) runFinalize(id string) {
 	state, out := combine(filepath.Join(h.dir, id))
-	// Local-dir fallback (no S3 yet): the output path stands in for the URL.
-	h.set(id, Status{State: state, URL: out})
+	// Default the URL to the local path; on a produced mp4 with S3 configured,
+	// stream it up and front it with the AWS URL. A failed/disabled upload keeps
+	// the local path (invariant 4: degrade the recording, never fail the call).
+	// The local file stays put either way.
+	url := out
+	if out != "" && h.s3 != nil {
+		if s3url, err := h.s3.upload(context.Background(), id, out); err != nil {
+			log.Printf("recorder: S3 upload failed for %s: %v; using local path", id, err)
+		} else {
+			url = s3url
+		}
+	}
+	h.set(id, Status{State: state, URL: url})
 }
 
 func (h *HTTPAPI) handleStatus(w http.ResponseWriter, r *http.Request) {

@@ -1,9 +1,10 @@
 """S3 storage backend.
 
-Uploads the MP4 to S3 (returns an `aws_url`-fronted URL) and keeps a local copy
-so other artifacts resolve without re-downloading. Credentials via the standard
-boto3 chain. Falls back to a local `/recordings/...` URL if boto3 is missing or
-the upload fails, so calls keep working in dev.
+Uploads transcript artifacts to S3 (returns an `aws_url`-fronted URL) and keeps a
+local copy so other code resolves them without re-downloading. The recorder owns
+the MP4 now (CONTRACTS §3), so the brain only pushes the text it writes.
+Credentials via the standard boto3 chain. Falls back to a local `/recordings/...`
+URL if boto3 is missing or the upload fails, so calls keep working in dev.
 """
 
 from __future__ import annotations
@@ -35,9 +36,9 @@ def _get_s3_client():
         return None
 
 
-# Only the MP4 (the customer-facing deliverable) is pushed to S3; all other
-# artifacts stay on local disk.
-S3_UPLOAD_SUFFIXES = (".mp4",)
+# The brain writes the transcript artifacts (recap.py: transcript.txt +
+# transcript.json); those go to S3. The recorder uploads the MP4 itself.
+S3_UPLOAD_SUFFIXES = (".json", ".txt")
 
 
 def _content_type(filename: str) -> str:

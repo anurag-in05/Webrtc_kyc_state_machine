@@ -1,0 +1,9 @@
+# Brain build context (./brain). Only requirements.txt + app/ are COPY'd; this
+# keeps the rest out of the context.
+.venv
+**/__pycache__
+**/*.pyc
+recordings/
+Dockerfile
+CLAUDE.md
+.env

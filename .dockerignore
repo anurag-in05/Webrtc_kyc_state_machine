@@ -1,0 +1,36 @@
+# Build context for the repo-root Go images (gateway, recorder). They need only
+# go.mod/go.sum, cmd/, internal/, proto/, and web/ (gateway client) — everything
+# else is excluded to keep the context small.
+
+.git
+.gitignore
+.dockerignore
+
+# Python services build from their own contexts (./brain, ./intent); not needed here.
+brain/
+intent/
+services/        # local-dev intent symlink shim
+docs/
+README.md
+requirements.txt
+
+# Virtualenvs, caches, compiled Python
+**/.venv
+.venv
+**/__pycache__
+**/*.pyc
+
+# Runtime data + secrets
+recordings/
+.env
+.env.example
+
+# Editor / OS / build artifacts
+.claude/
+.DS_Store
+**/.DS_Store
+node_modules
+*.png
+out.mp4
+test.h264
+WORKLOG.md
