@@ -1,11 +1,13 @@
-# Intent service deps — the model + classification stack only (CPU). The Docker
-# build installs CPU-only torch from the PyTorch CPU index first; sentence-
-# transformers then resolves against it. No media/storage deps here. pydantic
-# comes in via fastapi.
+# Intent model + classification stack (CPU). The Dockerfile installs CPU-only
+# torch from the PyTorch CPU index FIRST, so PyPI never pulls the CUDA build.
+# scikit-learn is pinned to 1.5.0 — the exact version the .pkl voters were trained
+# with (hard-invariant #1: provable match, no InconsistentVersionWarning).
+# numpy stays on 2.x: the pickles embed a numpy-2 BitGenerator, so numpy<2 can't
+# load them (and sklearn 1.5.0 runs fine on numpy 2.4.6 — verified).
 fastapi
 uvicorn
-sentence-transformers
-scikit-learn
-numpy
+sentence-transformers==5.5.1
+scikit-learn==1.5.0
+numpy==2.4.6
 joblib
 loguru

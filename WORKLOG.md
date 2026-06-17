@@ -753,3 +753,33 @@ existing code runs in.
 - Brain `config`/`routes.sessions` import; both gateway URLs bind from env.
 - `docker compose config` parses (warnings are just unset secrets in the test shell).
 
+### Dockerfile hardening pass (build + run all four)
+- Cleaned + shortened every Dockerfile (brain 39→21, intent 81→41, gateway/recorder
+  ~30→18). **brain went single-stage** — its deps are pure-Python wheels (no
+  compilers), so the builder/venv multi-stage bought nothing; a cache-mounted
+  `pip install` is the whole image. intent KEEPS multi-stage (it genuinely needs
+  the model bake + keeping build out of runtime); dropped its `build-essential`
+  (all deps ship cp312 wheels — the build confirmed).
+- **CPU-only torch verified, not just intended:** the intent build installs
+  `torch-2.12.0+cpu` from the PyTorch CPU index, and the later `pip install -r`
+  reuses it (`torch already satisfied … +cpu`) — zero `nvidia-*`/CUDA packages.
+  Final image **814 MB** (a CUDA build would be 5–7 GB).
+- **sklearn pinned to 1.5.0 to match the `.pkl` training version** (hard-invariant
+  #1 — a provable, byte-identical match for the consent classifier, not "passed the
+  cases tested"). Eliminates the `InconsistentVersionWarning` (verified: 0 in the
+  service logs; outputs still yes/no/please_repeat). **numpy stays on 2.x** — the
+  pickles embed a numpy-2 BitGenerator, so numpy<2 hard-fails loading (`MT19937 is
+  not a known BitGenerator module`), while sklearn 1.5.0 runs cleanly on numpy 2.4.6
+  (cp312/aarch64 wheel, no source compile) — both verified in an isolated container
+  before touching the image. sentence-transformers pinned 5.5.1.
+- **Bug found by smoke-testing (not by building):** `SentenceTransformer.save()`
+  writes `model.safetensors` mode 0600/root, so the non-root runtime user got
+  `PermissionError` loading it → the service silently folded **every** classify to
+  please_repeat while `/health` stayed 200. Fix: `chmod -R a+rX /opt/models` in the
+  builder (COPY preserves it). Also restored the HF cache mount on the bake step.
+- **All four built AND ran (smoke-tested), not just `compose config`:** brain
+  `/health` 200; intent `/classify` → yes / no / please_repeat (real, post-fix);
+  recorder boots HTTP :9090 + gRPC :9091 with ffmpeg 5.1.9 and the S3 local-fallback
+  log; gateway boots and listens on :8080. Images: gateway 28.9 MB (distroless
+  static), brain 366 MB, recorder 728 MB, intent 814 MB.
+
