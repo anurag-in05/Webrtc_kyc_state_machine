@@ -146,16 +146,19 @@ dir, and TURN is only needed for NAT traversal in production.
 
 ### Option A — Docker Compose (recommended)
 
-Builds and starts the four services. `coturn` is prod-only NAT traversal, so it's
-omitted by naming the services explicitly.
+[`run.sh`](run.sh) bootstraps `.env`, builds, and starts the four services
+(`coturn` is prod-only NAT traversal and is skipped):
 
 ```bash
-docker compose up --build intent brain recorder gateway
+./run.sh           # build + start (Ctrl-C to stop)
+./run.sh logs      # follow logs
+./run.sh down      # stop and remove the containers
 ```
 
-Then open **http://localhost:8080** (Chrome), allow camera + mic. Stop with
-`docker compose down`. The brain is published on `:8000`, the gateway on `:8080`;
-`intent` and `recorder` talk in-network.
+Equivalent to `docker compose up --build intent brain recorder gateway`. Then
+open **http://localhost:8080** (Chrome), allow camera + mic. The brain is
+published on `:8000`, the gateway on `:8080`; `intent` and `recorder` talk
+in-network.
 
 ### Option B — Native (no Docker, 4 terminals)
 
